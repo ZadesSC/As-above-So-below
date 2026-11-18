@@ -260,3 +260,148 @@ public sealed class WorkshopParityScenario : Rwtf.Scenario
             grid.IsPolluted(PollutableControl) && PercentMatches(c.Map));
     }
 }
+
+public sealed class WorkshopCombatScenario : Rwtf.Scenario
+{
+    private static readonly IntVec3 UpperCell = new IntVec3(71, 0, 95);
+    private static readonly IntVec3 LowerCell = new IntVec3(66, 0, 31);
+    private static readonly IntVec3 Opening = new IntVec3(66, 0, 95);
+    private Pawn upper;
+    private Pawn lower;
+    private int openedAt = -1;
+
+    public override string Id => "aasb.workshop-combat";
+    public override string Intent => "Exercise the vanilla ranged-verb visibility gate in both directions across a real opening";
+    public override string ProgressionMode => "native-frames-v1";
+    public override string EvidenceLevel => "direct-api";
+    public override string[] SupportedGameVersions => new[] { "1.7" };
+    public override string[] RequiredPackages => new[] { "astryl.AsAboveSoBelow2" };
+    public override string[] RequiredDefs => new[] { "AB2_LadderUp", "Gun_BoltActionRifle" };
+    public override FixtureProvider Fixture => new WorkshopParityFixture();
+
+    public override void Setup(Context c)
+    {
+        upper = c.SpawnPawn("upper-shooter", "Colonist", UpperCell, Faction.OfPlayer);
+        lower = c.SpawnPawn("lower-shooter", "Colonist", LowerCell, Faction.OfPlayer);
+        foreach (Pawn pawn in new[] { upper, lower })
+        {
+            pawn.drafter.Drafted = true;
+            var rifle = (ThingWithComps)ThingMaker.MakeThing(c.Def<ThingDef>("Gun_BoltActionRifle"));
+            pawn.equipment.AddEquipment(rifle);
+        }
+    }
+
+    private static bool CanHit(Pawn shooter, Pawn target)
+    {
+        Verb verb = shooter.equipment.PrimaryEq.PrimaryVerb;
+        return verb.TryFindShootLineFromTo(shooter.Position, target, out _);
+    }
+
+    public override bool AdvanceNative(Context c)
+    {
+        if (openedAt < 0)
+        {
+            c.Check("both subjects survived on their assigned floors", upper.Spawned && lower.Spawned
+                && upper.Position == UpperCell && lower.Position == LowerCell);
+            c.Check("sealed floor blocks shots in both directions", !CanHit(upper, lower) && !CanHit(lower, upper));
+            c.Map.terrainGrid.SetTerrain(Opening, c.Def<TerrainDef>("AB_OpenAir"));
+            c.Check("real opening inserted", c.Map.terrainGrid.TerrainAt(Opening).defName == "AB_OpenAir");
+            openedAt = c.Tick;
+        }
+        return c.Tick > openedAt;
+    }
+
+    public override void Assert(Context c)
+    {
+        c.Check("ranged verb finds a line down through the opening", CanHit(upper, lower));
+        c.Check("ranged verb finds a line up through the opening", CanHit(lower, upper));
+    }
+
+    public override void AfterReload(Context c)
+    {
+        c.Check("both shooters persisted on their floors", c.Subject<Pawn>("upper-shooter").Position == UpperCell
+            && c.Subject<Pawn>("lower-shooter").Position == LowerCell);
+    }
+}
+
+public sealed class WorkshopRopeScenario : Rwtf.Scenario
+{
+    private static readonly IntVec3 NearConnector = new IntVec3(64, 0, 30);
+    private static readonly IntVec3 HitchingCell = new IntVec3(71, 0, 96);
+    private Pawn handler;
+    private Pawn sheep;
+    private Building hitchingSpot;
+    private System.Collections.IDictionary heldCrossings;
+    private bool started;
+    private bool confirmedHold;
+    private bool confirmedCarry;
+
+    public override string Id => "aasb.workshop-ropee";
+    public override string Intent => "Move a roped animal through a ladder with a native hitching job";
+    public override string ProgressionMode => "native-frames-v1";
+    public override string EvidenceLevel => "assigned-job";
+    public override string[] SupportedGameVersions => new[] { "1.7" };
+    public override string[] RequiredPackages => new[] { "astryl.AsAboveSoBelow2" };
+    public override string[] RequiredDefs => new[] { "AB2_LadderUp", "CaravanPackingSpot" };
+    public override FixtureProvider Fixture => new WorkshopParityFixture();
+
+    public override void Setup(Context c)
+    {
+        handler = c.SpawnPawn("animal-handler", "Colonist", NearConnector, Faction.OfPlayer);
+        sheep = c.SpawnPawn("roped-sheep", "Sheep", NearConnector + IntVec3.East, Faction.OfPlayer);
+        hitchingSpot = (Building)GenSpawn.Spawn(c.Def<ThingDef>("CaravanPackingSpot"), HitchingCell, c.Map);
+        hitchingSpot.SetFaction(Faction.OfPlayer);
+        var patherType = AccessTools.TypeByName("AsAboveSoBelow.ABWormholePather");
+        heldCrossings = (System.Collections.IDictionary)AccessTools.Field(patherType, "holding").GetValue(null);
+    }
+
+    public override bool AdvanceNative(Context c)
+    {
+        if (!started)
+        {
+            started = true;
+            c.Check("handler and sheep survived warm-up on the surface",
+                handler.Spawned && sheep.Spawned && handler.Position.z < 64 && sheep.Position.z < 64);
+            handler.jobs.StopAll();
+            handler.Position = NearConnector;
+            handler.Notify_Teleported();
+            sheep.Position = NearConnector + IntVec3.East;
+            sheep.Notify_Teleported();
+            handler.roping.RopePawn(sheep);
+            var job = JobMaker.MakeJob(c.Def<JobDef>("RopeRoamerToHitchingPost"), sheep, hitchingSpot);
+            job.playerForced = true;
+            handler.jobs.StartJob(job, JobCondition.InterruptForced);
+        }
+
+        if (!confirmedHold && heldCrossings.Contains(handler.thingIDNumber))
+        {
+            confirmedHold = true;
+            c.Check("native roping job entered the held crossing with a nearby ropee",
+                handler.jobs.curDriver is JobDriver_RopeToDestination
+                && sheep.roping.RopedByPawn == handler && sheep.Position.InHorDistOf(NearConnector, 4f));
+        }
+
+        if (!confirmedCarry && handler.Position.z >= 64)
+        {
+            confirmedCarry = true;
+            c.Check("animal moved with the handler on the landing frame",
+                sheep.Position.z >= 64 && sheep.roping.RopedByPawn == handler,
+                new { handler = handler.Position.ToString(), sheep = sheep.Position.ToString(),
+                    roped = sheep.roping.RopedByPawn == handler });
+        }
+        return sheep.roping.RopedToHitchingSpot == hitchingSpot;
+    }
+
+    public override void Assert(Context c)
+    {
+        c.Check("native job hitched the transported animal on the upper level",
+            confirmedHold && confirmedCarry && sheep.Position.z >= 64 && sheep.roping.RopedToHitchingSpot == hitchingSpot);
+    }
+
+    public override void AfterReload(Context c)
+    {
+        var loaded = c.Subject<Pawn>("roped-sheep");
+        c.Check("transported animal and hitch survived reload", loaded.Position.z >= 64
+            && loaded.roping.RopedToHitchingSpot?.Position == HitchingCell);
+    }
+}

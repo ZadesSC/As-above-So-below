@@ -1083,6 +1083,7 @@ namespace AsAboveSoBelow
             // a teleport, so neither vanilla's door hook nor anything else fires here - see
             // ABFogReveal.RevealArrival for why both halves of the vanilla path miss.
             ABFogReveal.RevealArrival(pawn, landing);
+            CarryRopees(pawn, t.near, landing);
             // Cosmetic only, and deliberately AFTER the move: flips the §78 clip to its
             // emerge half, anchored on the FAR link's own axis and art offset. Never a gate
             // on the carry itself. See the banner on ABStairAnim.
