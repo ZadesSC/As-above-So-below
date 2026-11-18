@@ -100,14 +100,14 @@ namespace AsAboveSoBelow
 
             foreach (Thing duplicate in duplicates)
             {
-                duplicate.Destroy();
+                duplicate.DeSpawn();
             }
 
             // Snapshot the columns because spawning a carrier can change building lists.
             var columns = new List<Building_ABColumn>();
-            foreach (Building building in map.listerBuildings.allBuildingsColonist)
+            foreach (Thing thing in map.listerThings.AllThings)
             {
-                if (building is Building_ABColumn column)
+                if (thing is Building_ABColumn column)
                 {
                     columns.Add(column);
                 }

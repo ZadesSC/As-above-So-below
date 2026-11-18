@@ -350,6 +350,7 @@ namespace AsAboveSoBelow
             Patch_MixedBiome_ABBandBiomeAt.Forget();
             if (!Banded)
             {
+                Building_ABColumn.ReconcileCarriers(map);
                 return;
             }
             ABWormholeRearmHook.Register(map);

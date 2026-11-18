@@ -251,6 +251,7 @@ Each row records a changed output file, including possible compiler and engine A
 
 ## Verification
 
+- XML files parsed successfully. Both selected load-folder sets contain exactly one compiled DLL, the Workshop license and item ID match the fork, and each DDS path has a PNG counterpart.
 - Release builds for both targets completed with zero warnings and errors using the local game and Workshop reference assemblies.
 - The standalone 1.7 launcher ran with a disposable save-data folder and the existing zero app ID. The game attempted Steam initialization, which failed for lack of an app ID. The run also encountered a duplicate package ID and the installed Harmony 3.0.4 runtime reported a missing `WaylithClr.MethodBodyTransformer` type. The launch therefore provides no gameplay validation. No additional runtime launches were made.
 - A 1.6 runtime launch would use the separate Game-1.6 installation. The requested runtime path only permits Game, so verification of 1.6 is build-only.
