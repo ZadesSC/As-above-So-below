@@ -135,58 +135,56 @@ namespace AsAboveSoBelow
         /// </summary>
         public static void SeedAltitudeSnow(Map map, ABBandMap bands)
         {
-            if (map == null || bands == null || !bands.Banded || !ABGuard.On(ABGuard.Weather))
+            if (map == null || bands == null || !bands.Banded || !ABGuard.On(ABGuard.Weather) || ABOrbitRules.InVacuum(map))
             {
                 return;
             }
-            float outdoor;
+
+            float num;
             try
             {
-                outdoor = map.mapTemperature.OutdoorTemp;
+                num = map.mapTemperature.OutdoorTemp;
             }
             catch
             {
-                outdoor = map.TileInfo != null ? map.TileInfo.temperature : 0f;
+                num = ((map.TileInfo != null) ? map.TileInfo.temperature : 0f);
             }
-            TerrainGrid terrain = map.terrainGrid;
-            RoofGrid roofs = map.roofGrid;
-            SnowGrid snow = map.snowGrid;
-            int seeded = 0;
-            for (int band = bands.surfaceBand + 1; band < bands.bandCount; band++)
+
+            TerrainGrid terrainGrid = map.terrainGrid;
+            RoofGrid roofGrid = map.roofGrid;
+            SnowGrid snowGrid = map.snowGrid;
+            int num2 = 0;
+            for (int i = bands.surfaceBand + 1; i < bands.bandCount; i++)
             {
-                float t = outdoor + ABBandEnv.TempOffsetForLevel(bands, band - bands.surfaceBand);
-                if (t >= 0f)
-                {
-                    continue; // this level is above freezing today; no snow line here
-                }
-                float depth = Mathf.Clamp01(-t / 20f);
-                if (depth <= 0.01f)
+                float num3 = num + ABBandEnv.TempOffsetForLevel(bands, i - bands.surfaceBand);
+                if (num3 >= 0f)
                 {
                     continue;
                 }
-                foreach (IntVec3 c in bands.RectOfBand(band))
+
+                float num4 = Mathf.Clamp01((0f - num3) / 20f);
+                if (num4 <= 0.01f)
                 {
-                    if (!c.InBounds(map))
+                    continue;
+                }
+
+                foreach (IntVec3 item in bands.RectOfBand(i))
+                {
+                    if (item.InBounds(map))
                     {
-                        continue;
+                        TerrainDef terrainDef = terrainGrid.TerrainAt(item);
+                        if (terrainDef != null && terrainDef.holdSnowOrSand && !roofGrid.Roofed(item))
+                        {
+                            snowGrid.SetDepth(item, num4);
+                            num2++;
+                        }
                     }
-                    // Cheap filters FIRST. On a sky band most cells are open air (which no
-                    // longer holds snow) or roofed mountain mass, so this rejects the large
-                    // majority before touching SnowGrid at all - SetDepth is not free, it
-                    // re-checks the edifice grid and can dirty mesh and path cost per cell.
-                    TerrainDef td = terrain.TerrainAt(c);
-                    if (td == null || !td.holdSnowOrSand || roofs.Roofed(c))
-                    {
-                        continue;
-                    }
-                    snow.SetDepth(c, depth);
-                    seeded++;
                 }
             }
-            if (seeded > 0)
+
+            if (num2 > 0)
             {
-                ABLog.Dev("Altitude snow seeded on " + seeded + " cell(s) (surface "
-                    + outdoor.ToString("0.0") + "C).");
+                ABLog.Dev("Altitude snow seeded on " + num2 + " cell(s) (surface " + num.ToString("0.0") + "C).");
             }
         }
     }

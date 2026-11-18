@@ -341,18 +341,35 @@ namespace AsAboveSoBelow
         /// whole VIEW inside these, not just its centre - see the clamp below.</summary>
         public static bool TryBandBounds(Map map, out float minZ, out float maxZ)
         {
+            return TryBoundsOf(map, CurrentBand(map), out minZ, out maxZ);
+        }
+        private static bool TryBoundsOf(Map map, int band, out float minZ, out float maxZ)
+        {
             minZ = 0f;
             maxZ = 0f;
-            ABBandMap bands = ABBands.CompOf(map);
-            if (map == null || bands == null || !bands.Banded)
+            ABBandMap aBBandMap = ABBands.CompOf(map);
+            if (map == null || aBBandMap == null || !aBBandMap.Banded)
             {
                 return false;
             }
-            CellRect r = bands.RectOfBand(CurrentBand(map));
-            minZ = r.minZ;
-            maxZ = r.maxZ + 1;
+
+            CellRect cellRect = aBBandMap.RectOfBand(band);
+            minZ = cellRect.minZ;
+            maxZ = cellRect.maxZ + 1;
             return true;
         }
+
+        public static bool TryRenderBandBounds(Map map, out float minZ, out float maxZ)
+        {
+            return TryBoundsOf(map, RenderBand(map), out minZ, out maxZ);
+        }
+
+        public static int RenderBand(Map map)
+        {
+            int band;
+            return ProgressRendererCompat.TryPinnedBand(map, out band) ? band : CurrentBand(map);
+        }
+
     }
 
     /// <summary>
@@ -415,60 +432,46 @@ namespace AsAboveSoBelow
                 {
                     cachedFrame = Time.frameCount;
                     cachedActive = false;
-                    Map map = Find.CurrentMap;
-                    if (map != null
-                        // Gravship rendering encapsulates its own bounds into the view
-                        // downstream of this; leave that path alone rather than clipping a
-                        // rect it is about to extend for a different purpose.
-                        && !WorldComponent_GravshipController.GravshipRenderInProgess
-                        && ABBandView.TryBandBounds(map, out float minZ, out float maxZ))
+                    Map currentMap = Find.CurrentMap;
+                    if (currentMap != null && !WorldComponent_GravshipController.GravshipRenderInProgess && ABBandView.TryRenderBandBounds(currentMap, out var minZ, out var maxZ))
                     {
                         cachedActive = true;
                         cachedLo = Mathf.RoundToInt(minZ);
                         cachedHi = Mathf.RoundToInt(maxZ) - 1;
                     }
                 }
+
                 if (!cachedActive)
                 {
                     return;
                 }
-                int lo2 = cachedLo;
-                int hi2 = cachedHi;
-                if (__result.minZ >= lo2 && __result.maxZ <= hi2)
+
+                int num = cachedLo;
+                int num2 = cachedHi;
+                if (__result.minZ < num || __result.maxZ > num2)
                 {
-                    return; // already inside the band - the common case, and free
+                    CellRect cellRect = __result;
+                    if (cellRect.maxZ < num)
+                    {
+                        cellRect.minZ = num;
+                        cellRect.maxZ = num;
+                    }
+                    else if (cellRect.minZ > num2)
+                    {
+                        cellRect.minZ = num2;
+                        cellRect.maxZ = num2;
+                    }
+                    else
+                    {
+                        cellRect.minZ = Mathf.Max(cellRect.minZ, num);
+                        cellRect.maxZ = Mathf.Min(cellRect.maxZ, num2);
+                    }
+
+                    __result = cellRect;
                 }
-                // NEVER hand back an empty or inverted rect.
-                //
-                // The first version collapsed a fully off-band view to `maxZ = minZ - 1`,
-                // i.e. Height 0. That rect does not stay contained: MapDrawer feeds it
-                // through ExpandedBy(1), and SectionLayer_SunShadows.GetSunShadowsViewRect
-                // shifts its edges by the light vector and re-clips - so a degenerate rect
-                // propagates into vanilla geometry and the Burst cull job rather than
-                // simply drawing nothing. Clamping to a single valid row at the band edge
-                // draws just as little and stays a well-formed rect everywhere downstream.
-                CellRect r = __result;
-                if (r.maxZ < lo2)
-                {
-                    r.minZ = lo2;
-                    r.maxZ = lo2;
-                }
-                else if (r.minZ > hi2)
-                {
-                    r.minZ = hi2;
-                    r.maxZ = hi2;
-                }
-                else
-                {
-                    r.minZ = Mathf.Max(r.minZ, lo2);
-                    r.maxZ = Mathf.Min(r.maxZ, hi2);
-                }
-                __result = r;
             }
             catch
             {
-                // Never let a view-rect tweak break rendering; worst case the neighbouring
-                // band shows for a frame.
             }
         }
     }

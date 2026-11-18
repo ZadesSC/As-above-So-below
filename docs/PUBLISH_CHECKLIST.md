@@ -12,11 +12,12 @@ old tree. Work top to bottom; nothing here is optional.
 ## 1. Code state
 
 - [ ] Every window-5 item verified in game, or knowingly shipped unverified (record which).
-- [ ] **Fresh RELEASE build.** `dotnet build -c Release` in `Source/`. The workspace
-      normally holds DEV builds; do not ship one.
-      `OutputPath` is pinned to `..\Assemblies\`, so Release overwrites the same dll.
+- [ ] **Fresh Release builds.** Build `Source/ModSource.csproj` once per version with
+      `-c Release -p:RimWorldVersion=<version> -p:RimWorldManagedDir=<managed directory>
+      -p:WorkshopDir=<local Workshop content directory>`. Outputs go to
+      `1.6/Assemblies/` and `1.7/Assemblies/`.
 - [ ] Build is **0 warnings, 0 errors**.
-- [ ] `Assemblies/` contains **only** `AsAboveSoBelow.dll`. No `.pdb`
+- [ ] Each versioned `Assemblies/` contains **only** `AsAboveSoBelow.dll`. No `.pdb`
       (`DebugType=none` in the csproj already enforces this), no stray dlls.
 - [ ] **Never ship `0Harmony.dll`.** Harmony is a mod dependency, declared in About.xml.
 
@@ -31,7 +32,7 @@ old tree. Work top to bottom; nothing here is optional.
 
 ## 3. Metadata
 
-- [ ] `About/About.xml`: name, packageId `astryl.AsAboveSoBelow2`, `supportedVersions` = 1.6.
+- [ ] `About/About.xml`: name, packageId `astryl.AsAboveSoBelow2`, `supportedVersions` matches the shipped version folders.
 - [ ] Description is the USER's copy. Do not rewrite it during publish prep.
 - [ ] Title carries its **two glyphs** (`◆ … ◆`).
 - [ ] `About/PublishedFileId.txt` still reads `3776015553`. Losing this file publishes a

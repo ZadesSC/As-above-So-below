@@ -1,3 +1,10 @@
+using System;
+using System.IO;
+using System.Reflection;
+using HarmonyLib;
+using UnityEngine;
+using Verse.AI;
+using Verse.AI.Group;
 using System.Collections.Generic;
 using System.Text;
 using LudeonTK;
@@ -22,47 +29,50 @@ namespace AsAboveSoBelow
     /// </summary>
     public static partial class ABDevTools
     {
-        [DebugAction("As above", "AB2: combat report",
-            allowedGameStates = AllowedGameStates.PlayingOnMap)]
+        [DebugAction("As above", "AB2: combat report", allowedGameStates = AllowedGameStates.PlayingOnMap)]
         private static void V2CombatReport()
         {
-            Map map = Find.CurrentMap;
-            StringBuilder sb = new StringBuilder();
-            sb.AppendLine("V2 combat report:");
-            sb.AppendLine("  guard: combat=" + ABGuard.On(ABGuard.Combat)
-                + " rendering=" + ABGuard.On(ABGuard.Rendering)
-                + " clickThrough=" + ABBelowClickThrough.Enabled);
-            sb.AppendLine("  geometry rule: driftPerLevel=" + ABShaft.MaxDriftPerLevel
-                + " verticalCostPerLevel=" + ABShaft.VerticalCostPerLevel);
-            sb.AppendLine("  shaft: " + ABShaft.CounterReport());
-            sb.AppendLine("  " + ABCombatAcquisition.CounterReport());
-            sb.AppendLine("  " + ABCombatPosition.CounterReport());
-            sb.AppendLine("  " + ABCombatTargeting.CounterReport());
-            sb.AppendLine("  " + ABRangeOverlay.CounterReport());
-            sb.AppendLine("  " + ABCombatRelay.CounterReport());
-            sb.AppendLine("  " + ABBandLeap.CounterReport());
-            sb.AppendLine("  " + ABBandLeapAI.CounterReport());
-            sb.AppendLine("  " + ABCombatAbilities.CounterReport());
-            sb.AppendLine("  " + ABBandSenses.CounterReport());
-            sb.AppendLine("  " + ABBandArrivals.CounterReport());
-            sb.AppendLine("  " + ABCECompat.CounterReport());
-            if (map != null)
+            Map currentMap = Find.CurrentMap;
+            StringBuilder stringBuilder = new StringBuilder();
+            stringBuilder.AppendLine("V2 combat report:");
+            stringBuilder.AppendLine("  guard: combat=" + ABGuard.On(ABGuard.Combat) + " rendering=" + ABGuard.On(ABGuard.Rendering) + " clickThrough=" + ABBelowClickThrough.Enabled);
+            stringBuilder.AppendLine("  geometry rule: driftPerLevel=" + 12f + " verticalCostPerLevel=" + 3f);
+            stringBuilder.AppendLine("  shaft: " + ABShaft.CounterReport() + " leanSolves=" + ABCombatV2.leanSolves);
+            stringBuilder.AppendLine("  " + ABCombatCover.CounterReport() + " largePawnsCrossSight=" + LargePawnsCompat.crossAnswered);
+            stringBuilder.AppendLine("  " + Patch_ShotReport_ABBandLocalDistance.CounterReport());
+            stringBuilder.AppendLine("  " + ABCombatAcquisition.CounterReport());
+            stringBuilder.AppendLine("  " + ABCombatPosition.CounterReport());
+            stringBuilder.AppendLine("  " + ABCombatTargeting.CounterReport());
+            stringBuilder.AppendLine("  " + ABRangeOverlay.CounterReport());
+            stringBuilder.AppendLine("  " + ABCombatRelay.CounterReport());
+            stringBuilder.AppendLine("  " + ABBandLeap.CounterReport());
+            stringBuilder.AppendLine("  " + ABBandLeapAI.CounterReport());
+            stringBuilder.AppendLine("  " + ABCombatAbilities.CounterReport());
+            stringBuilder.AppendLine("  " + ABBandSenses.CounterReport());
+            stringBuilder.AppendLine("  " + ABBandArrivals.CounterReport());
+            stringBuilder.AppendLine("  defend-base anchors moved onto the pawns' level: " + Patch_LordMaker_ABDefendBaseAnchor.anchorsMoved);
+            stringBuilder.AppendLine(VanillaGravshipCompat.CounterReport());
+            stringBuilder.AppendLine("  " + ABCECompat.CounterReport());
+            stringBuilder.AppendLine("  " + ABCEHuntCompat.CounterReport());
+            stringBuilder.AppendLine("  " + ABShamblerCrossLevel.CounterReport());
+            if (currentMap != null)
             {
-                ABBandMap bands = ABBands.CompOf(map);
-                sb.AppendLine("  map: banded=" + (bands != null && bands.Banded)
-                    + " viewBand=" + (map != null ? ABBandView.CurrentBand(map) : -1)
-                    + " openAirCells=" + CountOpenAir(map));
+                ABBandMap aBBandMap = ABBands.CompOf(currentMap);
+                stringBuilder.AppendLine("  map: banded=" + (aBBandMap?.Banded ?? false) + " viewBand=" + ((currentMap != null) ? ABBandView.CurrentBand(currentMap) : (-1)) + " openAirCells=" + CountOpenAir(currentMap));
             }
-            Log.Warning(ABLog.Tag + " " + sb.ToString().TrimEndNewlines());
-            Messages.Message("AB2: combat report written to log.",
-                MessageTypeDefOf.TaskCompletion, false);
+
+            Log.Warning("[As above, So below] " + stringBuilder.ToString().TrimEndNewlines());
+            Messages.Message("AB2: combat report written to log.", MessageTypeDefOf.TaskCompletion, historical: false);
         }
 
-        [DebugAction("As above", "AB2: reset combat counters",
-            allowedGameStates = AllowedGameStates.PlayingOnMap)]
+        [DebugAction("As above", "AB2: reset combat counters", allowedGameStates = AllowedGameStates.PlayingOnMap)]
         private static void V2ResetCombatCounters()
         {
             ABShaft.ResetCounters();
+            ABCombatV2.leanSolves = 0;
+            ABCombatCover.ResetCounters();
+            LargePawnsCompat.crossAnswered = 0;
+            Patch_ShotReport_ABBandLocalDistance.ResetCounters();
             ABCombatAcquisition.ResetCounters();
             ABCombatPosition.ResetCounters();
             ABCombatTargeting.ResetCounters();
@@ -74,8 +84,9 @@ namespace AsAboveSoBelow
             ABBandSenses.ResetCounters();
             ABBandArrivals.ResetCounters();
             ABCECompat.ResetCounters();
-            Messages.Message("AB2: combat counters reset.", MessageTypeDefOf.TaskCompletion,
-                false);
+            ABCEHuntCompat.huntDistancesLocalized = 0;
+            ABShamblerCrossLevel.ResetCounters();
+            Messages.Message("AB2: combat counters reset.", MessageTypeDefOf.TaskCompletion, historical: false);
         }
 
         /// <summary>
@@ -86,84 +97,126 @@ namespace AsAboveSoBelow
         /// trace at all, which would read as "the solver was never asked" - the exact
         /// misreading that costs a test cycle.
         /// </summary>
-        [DebugAction("As above", "AB2: why can't this pawn shoot that",
-            allowedGameStates = AllowedGameStates.PlayingOnMap)]
+        [DebugAction("As above", "AB2: why can't this pawn shoot that", allowedGameStates = AllowedGameStates.PlayingOnMap)]
         private static void V2WhyNoShot()
         {
-            Map map = Find.CurrentMap;
-            if (map == null)
+            Map currentMap = Find.CurrentMap;
+            if (currentMap == null)
             {
                 return;
             }
-            ABBandMap bands = ABBands.CompOf(map);
-            if (bands == null || !bands.Banded)
+
+            ABBandMap aBBandMap = ABBands.CompOf(currentMap);
+            if (aBBandMap == null || !aBBandMap.Banded)
             {
-                Log.Warning(ABLog.Tag + " V2 shot probe: this map is not banded.");
+                Log.Warning("[As above, So below] V2 shot probe: this map is not banded.");
                 return;
             }
-            Thing shooter = null;
-            foreach (object o in Find.Selector.SelectedObjects)
+
+            Thing thing = null;
+            foreach (object selectedObject in Find.Selector.SelectedObjects)
             {
-                if (o is Thing t && t.Spawned)
+                if (selectedObject is Thing { Spawned: not false } thing2)
                 {
-                    shooter = t;
+                    thing = thing2;
                     break;
                 }
             }
-            if (shooter == null)
+
+            if (thing == null)
             {
-                Messages.Message("AB2: select a pawn or turret first.",
-                    MessageTypeDefOf.RejectInput, false);
+                Messages.Message("AB2: select a pawn or turret first.", MessageTypeDefOf.RejectInput, historical: false);
                 return;
             }
-            Verb verb = VerbOf(shooter);
-            StringBuilder sb = new StringBuilder();
-            sb.AppendLine("V2 shot probe for " + shooter.LabelShortCap + " at "
-                + shooter.Position + " (band " + bands.BandOf(shooter.Position) + ", view band "
-                + ABBandView.CurrentBand(map) + ")");
+
+            Verb verb = VerbOf(thing);
+            StringBuilder stringBuilder = new StringBuilder();
+            stringBuilder.AppendLine("V2 shot probe for " + thing.LabelShortCap + " at " + thing.Position.ToString() + " (band " + aBBandMap.BandOf(thing.Position) + ", view band " + ABBandView.CurrentBand(currentMap) + ")");
             if (verb == null)
             {
-                sb.AppendLine("  NO EFFECTIVE RANGED VERB. Nothing below can apply - an "
-                    + "unarmed pawn, an unmanned turret, or a melee-only weapon.");
-                Log.Warning(ABLog.Tag + " " + sb.ToString().TrimEndNewlines());
+                stringBuilder.AppendLine("  NO EFFECTIVE RANGED VERB. Nothing below can apply - an unarmed pawn, an unmanned turret, or a melee-only weapon.");
+                Log.Warning("[As above, So below] " + stringBuilder.ToString().TrimEndNewlines());
                 return;
             }
-            bool overhead = ABShaft.IsOverheadFire(verb);
-            sb.AppendLine("  verb " + verb.GetType().Name + " range " + verb.EffectiveRange
-                + " minRange " + verb.verbProps.minRange
-                + " requireLOS=" + verb.verbProps.requireLineOfSight
-                + " fliesOverhead=" + verb.ProjectileFliesOverhead()
-                + " => rule: " + (overhead ? "MAP COORDINATES (levels ignored)" : "BALCONY"));
 
-            int shooterBand = bands.BandOf(shooter.Position);
-            int examined = 0;
-            List<Thing> targets = map.listerThings.ThingsInGroup(ThingRequestGroup.AttackTarget);
-            for (int i = 0; i < targets.Count; i++)
+            bool flag = ABShaft.IsOverheadFire(verb);
+            stringBuilder.AppendLine("  verb " + verb.GetType().Name + " range " + verb.EffectiveRange + " minRange " + verb.verbProps.minRange + " requireLOS=" + verb.verbProps.requireLineOfSight + " fliesOverhead=" + verb.ProjectileFliesOverhead() + " => rule: " + (flag ? "MAP COORDINATES (levels ignored)" : "BALCONY"));
+            int num = aBBandMap.BandOf(thing.Position);
+            int num2 = 0;
+            List<Thing> list = currentMap.listerThings.ThingsInGroup(ThingRequestGroup.AttackTarget);
+            for (int i = 0; i < list.Count; i++)
             {
-                Thing t = targets[i];
-                if (t == null || !t.Spawned || t == shooter)
+                Thing thing3 = list[i];
+                if (thing3 == null || !thing3.Spawned || thing3 == thing || aBBandMap.BandOf(thing3.Position) == num)
                 {
                     continue;
                 }
-                if (bands.BandOf(t.Position) == shooterBand)
+
+                num2++;
+                stringBuilder.AppendLine("  --- " + thing3.LabelShortCap + " (band " + aBBandMap.BandOf(thing3.Position) + ", hostile=" + thing.HostileTo(thing3) + ")");
+                stringBuilder.Append(ABShaft.Explain(currentMap, thing.Position, thing3.Position, verb.EffectiveRange, verb.verbProps.EffectiveMinRange(thing3, thing), flag));
+                bool flag2 = ABCombatV2.TrySolve(verb, thing.Position, thing3, out var sol, out var source, out var dest);
+                string text = "";
+                if (flag2)
                 {
-                    continue; // same band: vanilla's answer, not ours
+                    int localized = ABCombatCover.localized;
+                    int pointBlankSkipped = ABCombatCover.pointBlankSkipped;
+                    int crossAnswered = LargePawnsCompat.crossAnswered;
+                    text = CoverUtility.CalculateOverallBlockChance(thing3, thing.Position, currentMap).ToStringPercent();
+                    ABCombatCover.localized = localized;
+                    ABCombatCover.pointBlankSkipped = pointBlankSkipped;
+                    LargePawnsCompat.crossAnswered = crossAnswered;
                 }
-                examined++;
-                sb.AppendLine("  --- " + t.LabelShortCap + " (band " + bands.BandOf(t.Position)
-                    + ", hostile=" + shooter.HostileTo(t) + ")");
-                sb.Append(ABShaft.Explain(map, shooter.Position, t.Position,
-                    verb.EffectiveRange, verb.verbProps.EffectiveMinRange(t, shooter), overhead));
+
+                string text2;
+                if (!flag2)
+                {
+                    text2 = "no shot";
+                }
+                else
+                {
+                    string[] array = new string[7]
+                    {
+                        "SHOT from ",
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null
+                    };
+                    IntVec3 intVec = source;
+                    array[1] = intVec.ToString();
+                    array[2] = " at ";
+                    intVec = dest;
+                    array[3] = intVec.ToString();
+                    string text3;
+                    if (!sol.overhead)
+                    {
+                        intVec = sol.opening;
+                        text3 = " via opening " + intVec.ToString();
+                    }
+                    else
+                    {
+                        text3 = " (overhead)";
+                    }
+
+                    array[4] = text3;
+                    array[5] = ", cover ";
+                    array[6] = text;
+                    text2 = string.Concat(array);
+                }
+
+                stringBuilder.AppendLine("    verb verdict with lean-out cells: " + text2);
             }
-            if (examined == 0)
+
+            if (num2 == 0)
             {
-                sb.AppendLine("  NOTHING ATTACKABLE ON ANOTHER BAND AT ALL. That is the answer: "
-                    + "there is no cross-level target to fail against. Spawn something on "
-                    + "another level first (`AB2: open all bands` if it is still fogged).");
+                stringBuilder.AppendLine("  NOTHING ATTACKABLE ON ANOTHER BAND AT ALL. That is the answer: there is no cross-level target to fail against. Spawn something on another level first (`AB2: open all bands` if it is still fogged).");
             }
-            Log.Warning(ABLog.Tag + " " + sb.ToString().TrimEndNewlines());
-            Messages.Message("AB2: shot probe written to log (" + examined + " cross-band "
-                + "candidates).", MessageTypeDefOf.TaskCompletion, false);
+
+            Log.Warning("[As above, So below] " + stringBuilder.ToString().TrimEndNewlines());
+            Messages.Message("AB2: shot probe written to log (" + num2 + " cross-band candidates).", MessageTypeDefOf.TaskCompletion, historical: false);
         }
 
         /// <summary>The verb the thing would actually shoot with, for pawns and turrets alike.

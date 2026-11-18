@@ -217,6 +217,8 @@ namespace AsAboveSoBelow
         /// <summary>Immersive Opening only. Off = the opening cinematic stays on the
         /// colony's level (ferny's design, just aimed correctly). On = it walks the
         /// viewable bands top-down, ending on the colony.</summary>
+        public int progressRendererLevel = ProgressRendererCompat.LevelTopmost;
+
         public bool ioStackTour;
 
         // ---- sky band generation -------------------------------------------
@@ -392,6 +394,7 @@ namespace AsAboveSoBelow
                 ABDepthView.DefaultFalloff);
             Scribe_Values.Look(ref transitAnim, "transitAnim", true);
             Scribe_Values.Look(ref clampZoomToLevel, "clampZoomToLevel", true);
+            Scribe_Values.Look(ref progressRendererLevel, "progressRendererLevel", ProgressRendererCompat.LevelTopmost);
             Scribe_Values.Look(ref ioStackTour, "ioStackTour", false);
             Scribe_Values.Look(ref psFreezeAvatarWhilePeeking, "psFreezeAvatarWhilePeeking",
                 true);
@@ -664,6 +667,8 @@ namespace AsAboveSoBelow
             list.Label("AB_VisualsNote".Translate());
             GUI.color = dim;
             list.Gap(8f);
+
+            DoProgressRenderer(list);
 
             list.CheckboxLabeled("AB_TransitAnim".Translate(), ref transitAnim,
                 "AB_TransitAnimTip".Translate());
@@ -1086,6 +1091,42 @@ namespace AsAboveSoBelow
                     ABGuard.ReArm(s);
                 }
             }
+        }
+
+        private void DoProgressRenderer(Listing_Standard list)
+        {
+            if (!ProgressRendererCompat.Present)
+            {
+                return;
+            }
+
+            list.Label("AB_PRLevel".Translate());
+            Color previousColor = GUI.color;
+            GUI.color = NoteDim;
+            list.Label("AB_PRLevelNote".Translate());
+            string targetDescription = ProgressRendererCompat.DescribeTarget();
+            if (!string.IsNullOrEmpty(targetDescription))
+            {
+                list.Label(targetDescription);
+            }
+
+            GUI.color = previousColor;
+            if (list.RadioButton("AB_PRLevelTopmost".Translate(), progressRendererLevel == ProgressRendererCompat.LevelTopmost, 8f, "AB_PRLevelTopmostTip".Translate()))
+            {
+                progressRendererLevel = ProgressRendererCompat.LevelTopmost;
+            }
+
+            if (list.RadioButton("AB_PRLevelSurface".Translate(), progressRendererLevel == ProgressRendererCompat.LevelSurface, 8f, "AB_PRLevelSurfaceTip".Translate()))
+            {
+                progressRendererLevel = ProgressRendererCompat.LevelSurface;
+            }
+
+            if (list.RadioButton("AB_PRLevelViewed".Translate(), progressRendererLevel == ProgressRendererCompat.LevelViewed, 8f, "AB_PRLevelViewedTip".Translate()))
+            {
+                progressRendererLevel = ProgressRendererCompat.LevelViewed;
+            }
+
+            list.GapLine(10f);
         }
     }
 }

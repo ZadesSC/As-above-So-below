@@ -81,8 +81,11 @@
         <columnType>Power</columnType>
       </li>
     </modExtensions>
+    <!-- Power needs only Electricity: a cable up a shaft is no harder than one along a
+         wall, and the power toggle's own gate is the host conduit's research anyway.
+         Ducting and data stay behind AB2_TransferColumns (Fabrication). -->
     <researchPrerequisites>
-      <li>AB2_TransferColumns</li>
+      <li>Electricity</li>
     </researchPrerequisites>
   </ThingDef>
 
@@ -239,8 +242,9 @@
         <columnType>Power</columnType>
       </li>
     </modExtensions>
+    <!-- Electricity only, matching the power column above. -->
     <researchPrerequisites>
-      <li>AB2_TransferColumns</li>
+      <li>Electricity</li>
     </researchPrerequisites>
   </ThingDef>
 

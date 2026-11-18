@@ -44,46 +44,40 @@ namespace AsAboveSoBelow
     /// </summary>
     public class PlaceWorker_ABLinkApproach : PlaceWorker
     {
-        public override AcceptanceReport AllowsPlacing(BuildableDef def, IntVec3 center,
-            Rot4 rot, Map map, Thing thingToIgnore = null, Thing thing = null)
+        public override AcceptanceReport AllowsPlacing(BuildableDef def, IntVec3 center, Rot4 rot, Map map, Thing thingToIgnore = null, Thing thing = null)
         {
             if (map == null || def == null)
             {
                 return true;
             }
 
-            // A LINK THAT CANNOT CONNECT ANYWHERE IS REFUSED HERE, at the moment the
-            // player can still change their mind - not warned about after a colonist has
-            // hauled the materials and built it. The old shape (§29e) was a RejectInput
-            // message fired from SpawnSetup's TryEstablish: "no level in that direction",
-            // delivered AFTER the work was spent, with the finished ladder-to-nowhere
-            // left standing. That message survives as the backstop for paths that bypass
-            // PlaceWorkers entirely (dev spawns, quest spawns); this gate is the fix.
-            // CLAMP AT SELECTION (§35) applies to placement too.
-            ABBandMap bands = ABBands.CompOf(map);
-            if (bands == null || !bands.Banded)
+            ABBandMap aBBandMap = ABBands.CompOf(map);
+            if (aBBandMap == null || !aBBandMap.Banded)
             {
                 return new AcceptanceReport("AB_NotBandedHere".Translate());
             }
-            ABBandStairsExt ext = def.GetModExtension<ABBandStairsExt>();
-            if (ext != null && !ext.linksAllLevels)
+
+            ABBandStairsExt modExtension = def.GetModExtension<ABBandStairsExt>();
+            if (modExtension != null && !modExtension.linksAllLevels)
             {
-                int target = bands.BandOf(center) + ext.levelDelta;
-                if (!bands.BandExists(target))
+                int band = aBBandMap.BandOf(center) + modExtension.levelDelta;
+                if (!aBBandMap.BandExists(band))
                 {
-                    return new AcceptanceReport((ext.levelDelta > 0
-                        ? "AB_NoLevelAbove"
-                        : "AB_NoLevelBelow").Translate());
+                    return new AcceptanceReport(((modExtension.levelDelta > 0) ? "AB_NoLevelAbove" : "AB_NoLevelBelow").Translate());
                 }
             }
-            // The elevator needs no existence check on a banded map: banded means at
-            // least two bands, so there is always another level to serve.
 
             CellRect footprint = GenAdj.OccupiedRect(center, rot, def.Size);
+            if ((modExtension == null || modExtension.linksAllLevels || modExtension.levelDelta > 0) && !ABOrbitRules.LinkMayRise(map, footprint))
+            {
+                return new AcceptanceReport("AB_OrbitLinkNeedsPlatform".Translate());
+            }
+
             if (AnyApproach(footprint, map, thingToIgnore))
             {
                 return true;
             }
+
             return new AcceptanceReport("AB_LinkNeedsApproach".Translate());
         }
 

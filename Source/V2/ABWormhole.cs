@@ -1,3 +1,4 @@
+using System.Text;
 using System;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
@@ -172,30 +173,26 @@ namespace AsAboveSoBelow
 
         public static void Link(Building_Door a, Building_Door b)
         {
-            if (a == null || b == null || a.Map == null || a.Map != b.Map)
+            if (a == null || b == null || !a.Spawned || !b.Spawned)
             {
-                Log.Warning(ABLog.Tag + " V2: refusing to link wormhole ends on different maps.");
                 return;
             }
+
+            if (a.Map == null || a.Map != b.Map)
+            {
+                Log.Warning("[As above, So below] V2: refusing to link wormhole ends on different maps.");
+                return;
+            }
+
             List<Pair> list = ListFor(a.Map);
             for (int i = 0; i < list.Count; i++)
             {
-                // Dedupe the PAIR AS A SET - not "either member appears anywhere".
-                //
-                // The original check returned when either building was in ANY existing
-                // pair, which encoded the single-counterpart assumption: one building, one
-                // pair. The elevator broke it silently and precisely: it links bottom-up,
-                // so surface<->basement was added first, and then Link(surface, sky) found
-                // the surface car in that pair and bailed - as did the full-mesh
-                // Link(basement, sky). Diagnosed from `AB2: band info` reading
-                // "wormhole pairs: 1" on a three-car shaft whose bands were all open:
-                // every car established, one edge in the graph. CanReach to the sky was
-                // false with nothing visibly wrong - "the elevator only works going down".
                 if ((list[i].a == a && list[i].b == b) || (list[i].a == b && list[i].b == a))
                 {
-                    return; // this exact pair already exists
+                    return;
                 }
             }
+
             list.Add(new Pair { a = a, b = b });
             RearmAll(a.Map);
         }
@@ -473,147 +470,6 @@ namespace AsAboveSoBelow
         }
 
         /// <summary>
-        /// As above, planned for a SPECIFIC PAWN.
-        ///
-        /// ⚠⚠ §59 THE ROUTE DEPENDS ON WHO IS WALKING IT, AND THE PAWNLESS OVERLOAD ANSWERS
-        /// FOR SOMEONE WHO IGNORES FORBIDDEN DOORS. Every movement decision must come through
-        /// here with the real pawn; the pawnless form is for diagnostics and fixtures that
-        /// genuinely have nobody to ask.
-        ///
-        /// The pawn is consumed as ONE BIT (`RespectsForbiddenDoors`) resolved once, here,
-        /// and passed down as `forbidAware`. Resolving it per lookup instead would put
-        /// `CaresAboutForbidden` - which touches host faction, mental state, slave rebellion
-        /// and mech state - on the inside of a loop over every wormhole pair.
-        /// </summary>
-        public static bool TryGetTransit(Map map, IntVec3 from, IntVec3 to, Pawn pawn,
-            out Building_Door near, out Building_Door far)
-        {
-            near = null;
-            far = null;
-            if (map == null || !byMap.TryGetValue(map, out List<Pair> list) || list.Count == 0)
-            {
-                return false;
-            }
-            bool forbidAware = ABBandComponents.RespectsForbiddenDoors(pawn);
-            // §94.g: wander commutes keep the cheap all-straight-line ranking. An idle pawn
-            // does not need the optimal staircase, cross-band wander is frequent, and paying
-            // real pathfinding for it would be rule-4 negligence. Everything else - player
-            // orders, work jobs, the tick-side route preview - gets verified edges.
-            bool exact = pawn?.CurJob?.def != JobDefOf.GotoWander;
-            // PHASE 2: NODES ARE (BAND, COMPONENT), NOT BANDS.
-            //
-            // The old version keyed everything on band and early-returned when
-            // `bandFrom == bandTo`. That was unsound in two directions at once:
-            //  - it REFUSED a legitimate trip between two islands of the SAME band (two
-            //    plateaus on a sky level, two buildings' upper floors) - the §34 report case;
-            //  - it could ACCEPT a hop whose near anchor sat in an island the pawn cannot
-            //    walk to, because "same band" was treated as "reachable".
-            // Both vanish once the node is the island rather than the level.
-            int compFrom = ABBandComponents.ComponentOf(map, from, forbidAware);
-            if (compFrom < 0)
-            {
-                // The PAWN has no island: standing somewhere unwalkable, off-band, carried,
-                // or mid-spawn. Nothing to route FROM.
-                return false;
-            }
-
-            // ⚠⚠ A `Touch` TARGET IS USUALLY UNWALKABLE, AND THAT USED TO END THE ROUTE HERE.
-            // `ComponentOf` returns -1 for an unwalkable cell, and the old guard folded that
-            // in with "same island" as "not our business". But mining, deconstructing,
-            // attacking a wall and every other PathEndMode.Touch job targets an IMPASSABLE
-            // cell BY NATURE, so a cross-level mining trip could never be segmented onto a
-            // staircase. The pawn kept vanilla's CanReach=True (the synthetic RegionLink does
-            // connect the region graph) while the pathfinder returned NOT FOUND, and re-issued
-            // the job forever - the "stands still and never arrives" field report.
-            //
-            // CONSTRUCTION WAS UNAFFECTED AND THAT IS THE TELL: a BLUEPRINT is passable, so it
-            // HAS a component and routed fine. "Trying to go downstairs to mine and is stuck;
-            // constructing across levels seems fine" falls straight out of this one guard.
-            //
-            // Resolve the target the way the pathfinder does: to the cells a Touch job can
-            // actually stand on.
-            int compTo = ABBandComponents.ComponentOf(map, to, forbidAware);
-            if (compTo < 0)
-            {
-                return TryGetTransitToTouch(map, from, to, compFrom, forbidAware, list,
-                    pawn, exact, out near, out far);
-            }
-            if (compFrom == compTo)
-            {
-                // Same island: an ordinary intra-band path. Not our business.
-                return false;
-            }
-            // §94: the walkable-destination case seeds the planner with one island.
-            var destComps = new HashSet<int> { compTo };
-            return TryPlanFirstHop(map, list, from, to, compFrom, destComps, forbidAware,
-                pawn, exact, out near, out far);
-        }
-
-        /// <summary>
-        /// Route to a target that is ITSELF UNWALKABLE - rock being mined, a wall being
-        /// deconstructed, anything attacked in place. A pawn never stands on such a cell; it
-        /// stands on one of the 8 neighbours, exactly as `PathEndMode.Touch` does. So the
-        /// destination island is the island of an ADJACENT WALKABLE cell, not of the target.
-        ///
-        /// ⚠ IF ANY ADJACENT ISLAND IS THE PAWN'S OWN, THERE IS NOTHING TO SEGMENT and we
-        /// must say so. The pawn can already stand next to the target without a staircase,
-        /// and routing it through one would send a miner on a tour of the colony to reach
-        /// rock at its feet. This is the same soundness rule as `ConsiderHop`'s near-anchor
-        /// check, applied to the far end.
-        ///
-        /// ⚠ NEIGHBOURS MUST BE IN THE TARGET'S OWN BAND. Bands are slices of one Map along
-        /// +z, so the cell "one north" of a target on a band edge is a DIFFERENT LEVEL that
-        /// merely shares an x/z edge. Standing there touches nothing.
-        ///
-        /// Cost: only ever runs when the target is unwalkable, which is precisely the case
-        /// that previously returned false immediately. Walkable destinations are untouched.
-        /// </summary>
-        private static bool TryGetTransitToTouch(Map map, IntVec3 from, IntVec3 to,
-            int compFrom, bool forbidAware, List<Pair> list, Pawn pawn, bool exact,
-            out Building_Door near, out Building_Door far)
-        {
-            near = null;
-            far = null;
-
-            // §94: EVERY approach island seeds the planner at once. The old shape picked
-            // the min-hop island first and ranked anchors only within its table, so a rock
-            // face touchable from two rooms never let the genuinely cheaper approach
-            // compete. The planner's seed edge measures each destination-island anchor
-            // against the REAL target cell, so the chosen staircase is still the one
-            // nearest the rock.
-            HashSet<int> destComps = null;
-            for (int i = 0; i < 8; i++)
-            {
-                IntVec3 nb = to + GenAdj.AdjacentCells[i];
-                if (!nb.InBounds(map) || !ABBands.SameBand(map, nb, to))
-                {
-                    continue;
-                }
-                int cn = ABBandComponents.ComponentOf(map, nb, forbidAware);
-                if (cn < 0)
-                {
-                    continue;
-                }
-                if (cn == compFrom)
-                {
-                    // Already touchable from the pawn's own island: no transit wanted.
-                    return false;
-                }
-                if (destComps == null)
-                {
-                    destComps = new HashSet<int>();
-                }
-                destComps.Add(cn);
-            }
-            if (destComps == null)
-            {
-                return false;
-            }
-            return TryPlanFirstHop(map, list, from, to, compFrom, destComps, forbidAware,
-                pawn, exact, out near, out far);
-        }
-
-        /// <summary>
         /// §94: cost of one wormhole crossing, in walk-cell equivalents (a cell is ~13
         /// ticks at baseline speed; the §78 hold plus climb clip is on the order of 90
         /// ticks, so ~7 cells).
@@ -629,246 +485,6 @@ namespace AsAboveSoBelow
         ///    `farHops == hops - 1` strict-progress filter, which Dijkstra obsoletes.
         /// </summary>
         private const float FlightCost = 7f;
-
-        /// <summary>
-        /// §94 THE EXACT FIRST-HOP PLANNER. Multi-source Dijkstra over the anchor graph,
-        /// seeded at the destination island(s); the crossing that begins the cheapest full
-        /// chain from the pawn is returned.
-        ///
-        /// Nodes are anchor BUILDINGS (deduped - an elevator car appears once however many
-        /// counterpart pairs it sits in). Edges are the wormhole pairs at FlightCost each,
-        /// plus straight-line walks between anchors sharing an island. Seeds are the
-        /// anchors standing in a destination island, at their walk distance to the target
-        /// cell; the pawn enters the graph only through anchors of its own island, ranked
-        /// in ConsiderHop.
-        ///
-        /// ⚠⚠ NO DISTANCE IS EVER MEASURED ACROSS BANDS, BY CONSTRUCTION. Every walk edge
-        /// joins two members of ONE island, and an island never spans bands (component ids
-        /// encode their band - see ABBandComponents.ComponentOf). Crossings are a CONSTANT
-        /// because the map-space separation of a pair's ends is band scaffolding, not
-        /// geometry. That is the structural guarantee that the §94 mis-route - "north" and
-        /// "up" priced as the same number - cannot be reintroduced by any future layout.
-        ///
-        /// ⚠⚠ §94.g VERIFIED EDGES, NOT BLIND STRAIGHT LINES. Straight-line walk terms lie
-        /// across walls - field-proven within an hour of §94 v1 shipping: the estimate said
-        /// the grand staircase mouth was 18 cells away, the pather measured 105 around the
-        /// compound wall, and the planner sent the pawn on the long march. Exact mode
-        /// therefore (a) prices anchor-to-anchor mid-chain edges with REAL path lengths,
-        /// cached per region-rebuild version (WalkEdge), and (b) verifies the WINNER's
-        /// pawn-side and destination-side legs with real paths, correcting the lied term
-        /// and re-ranking until the winner survives - candidates that never win are never
-        /// paid for (rule 76). Path-avoid areas now weigh in exactly as far as they bend
-        /// those real paths. Estimate mode (wander, §94.g) stays all-straight-line and
-        /// touches neither the pathfinder nor the cache: FindPathNow is tick-side-only
-        /// machinery, and a per-frame caller would be the trap ABTransitVisuals' banner
-        /// documents.
-        ///
-        /// ⚠ CROSSINGS ARE UNDIRECTED. Every link type today conducts both ways; if a
-        /// one-way link ever ships, the cross-edge relaxation below needs a direction
-        /// check.
-        ///
-        /// Budget: O(nodes^2) with linear-scan extraction, nodes = 2 x live pairs, only on
-        /// genuinely cross-island StartPaths - the same order of work as the per-call
-        /// dictionaries the old BFS built (and the Touch case ran up to eight of those).
-        /// </summary>
-        private static bool TryPlanFirstHop(Map map, List<Pair> list, IntVec3 from,
-            IntVec3 to, int compFrom, HashSet<int> destComps, bool forbidAware, Pawn pawn,
-            bool exact, out Building_Door near, out Building_Door far)
-        {
-            near = null;
-            far = null;
-
-            // ---- nodes ------------------------------------------------------------
-            var index = new Dictionary<Building_Door, int>();
-            var nodes = new List<Building_Door>();
-            var comps = new List<int>();
-            for (int i = 0; i < list.Count; i++)
-            {
-                Pair p = list[i];
-                if (p.a == null || p.b == null || !p.a.Spawned || !p.b.Spawned)
-                {
-                    continue;
-                }
-                AddNode(map, p.a, forbidAware, index, nodes, comps);
-                AddNode(map, p.b, forbidAware, index, nodes, comps);
-            }
-            int n = nodes.Count;
-            if (n == 0)
-            {
-                return false;
-            }
-
-            // ---- estimates that start as straight lines and get verified ----------
-            // seed[i]: leg from a destination-island anchor to `to`. walkIn[i]: leg from
-            // the pawn to a compFrom anchor. Both LIE across walls; the loop below
-            // replaces exactly the estimates that DECIDE the answer with real path
-            // lengths, one winner at a time (rule 76).
-            float[] seed = new float[n];
-            bool[] seedDone = new bool[n];
-            float[] walkIn = new float[n];
-            bool[] walkInDone = new bool[n];
-            for (int i = 0; i < n; i++)
-            {
-                seed[i] = destComps.Contains(comps[i])
-                    ? (nodes[i].Position - to).LengthHorizontal
-                    : float.MaxValue;
-                walkIn[i] = comps[i] == compFrom
-                    ? (nodes[i].Position - from).LengthHorizontal
-                    : float.MaxValue;
-            }
-
-            float[] dist = new float[n];
-            bool[] done = new bool[n];
-            for (int round = 0; ; round++)
-            {
-                // ---- Dijkstra from the destination, against current estimates -----
-                // Re-run per correction round: n is tiny, and a corrected seed feeds
-                // every dist[] downstream, so patching in place would be wrong.
-                for (int i = 0; i < n; i++)
-                {
-                    dist[i] = seed[i];
-                    done[i] = false;
-                }
-                for (int settle = 0; settle < n; settle++)
-                {
-                    int u = -1;
-                    float best = float.MaxValue;
-                    for (int i = 0; i < n; i++)
-                    {
-                        if (!done[i] && dist[i] < best)
-                        {
-                            best = dist[i];
-                            u = i;
-                        }
-                    }
-                    if (u < 0)
-                    {
-                        break; // everything still open is unreachable
-                    }
-                    done[u] = true;
-                    // Walk edges: every other anchor on the settled node's island.
-                    // §94.g: real and version-cached in exact mode - in the reporting
-                    // colony the battlement corridor between two ladders is several
-                    // times its crow-flies length, and mid-chain legs never reach the
-                    // winner-verification below, so they must be honest up front.
-                    for (int i = 0; i < n; i++)
-                    {
-                        if (done[i] || comps[i] != comps[u])
-                        {
-                            continue;
-                        }
-                        float step = exact
-                            ? WalkEdge(map, nodes[u], nodes[i], forbidAware)
-                            : (nodes[i].Position - nodes[u].Position).LengthHorizontal;
-                        float cand = dist[u] + step;
-                        if (cand < dist[i])
-                        {
-                            dist[i] = cand;
-                        }
-                    }
-                    // Crossing edges: every pair this building is an end of.
-                    for (int i = 0; i < list.Count; i++)
-                    {
-                        Pair p = list[i];
-                        Building_Door other = p.a == nodes[u] ? p.b
-                            : (p.b == nodes[u] ? p.a : null);
-                        if (other == null || !index.TryGetValue(other, out int vi) || vi < 0
-                            || done[vi])
-                        {
-                            continue;
-                        }
-                        float cand = dist[u] + FlightCost;
-                        if (cand < dist[vi])
-                        {
-                            dist[vi] = cand;
-                        }
-                    }
-                }
-
-                // ---- rank the first hop against current estimates -----------------
-                float bestTotal = float.MaxValue;
-                int bestNi = -1;
-                int bestFi = -1;
-                for (int i = 0; i < list.Count; i++)
-                {
-                    Pair p = list[i];
-                    if (p.a == null || p.b == null || !p.a.Spawned || !p.b.Spawned)
-                    {
-                        continue;
-                    }
-                    RankHop(index, comps, compFrom, walkIn, dist, p.a, p.b,
-                        ref bestTotal, ref bestNi, ref bestFi);
-                    RankHop(index, comps, compFrom, walkIn, dist, p.b, p.a,
-                        ref bestTotal, ref bestNi, ref bestFi);
-                }
-                if (bestNi < 0)
-                {
-                    return false;
-                }
-                near = nodes[bestNi];
-                far = nodes[bestFi];
-                if (!exact)
-                {
-                    return true;
-                }
-
-                // ---- verify the winner; correct and re-rank when a term lied ------
-                // Each slot is verified at most once, so every dirty round marks fresh
-                // ground and the loop terminates; the cap is a belt for the
-                // pathological. A NOT-FOUND probe keeps the estimate (transient region
-                // states mid-rebuild) rather than condemning the candidate.
-                bool clean = true;
-                if (!walkInDone[bestNi])
-                {
-                    walkInDone[bestNi] = true;
-                    float real = RealPathLen(map, pawn, from,
-                        new LocalTargetInfo(nodes[bestNi]));
-                    if (real >= 0f && Math.Abs(real - walkIn[bestNi]) > VerifyEpsilon)
-                    {
-                        if (ABV2Debug.LogTransit)
-                        {
-                            ABV2Debug.Transit("PLAN: walk-in to " + nodes[bestNi].ThingID
-                                + " " + nodes[bestNi].Position + " corrected "
-                                + walkIn[bestNi].ToString("0.0") + " -> "
-                                + real.ToString("0.0"));
-                        }
-                        walkIn[bestNi] = real;
-                        clean = false;
-                    }
-                }
-                if (destComps.Contains(comps[bestFi]) && !seedDone[bestFi])
-                {
-                    seedDone[bestFi] = true;
-                    float real = RealPathLen(map, pawn, nodes[bestFi].Position,
-                        new LocalTargetInfo(to));
-                    if (real >= 0f && Math.Abs(real - seed[bestFi]) > VerifyEpsilon)
-                    {
-                        if (ABV2Debug.LogTransit)
-                        {
-                            ABV2Debug.Transit("PLAN: seed leg from " + nodes[bestFi].ThingID
-                                + " " + nodes[bestFi].Position + " corrected "
-                                + seed[bestFi].ToString("0.0") + " -> "
-                                + real.ToString("0.0"));
-                        }
-                        seed[bestFi] = real;
-                        clean = false;
-                    }
-                }
-                if (clean)
-                {
-                    return true;
-                }
-                if (round >= MaxVerifyRounds)
-                {
-                    if (ABV2Debug.LogTransit)
-                    {
-                        ABV2Debug.Transit("PLAN: verify budget exhausted after "
-                            + MaxVerifyRounds + " rounds; shipping current best");
-                    }
-                    return true;
-                }
-            }
-        }
 
         /// <summary>
         /// Register one anchor building as a planner node, resolving its island ONCE.
@@ -1067,6 +683,517 @@ namespace AsAboveSoBelow
                 bestFi = fi;
             }
         }
+        private static LocalTargetInfo ProbeTarget(Map map, IntVec3 to, LocalTargetInfo destTarget)
+        {
+            Thing thing = (destTarget.HasThing ? destTarget.Thing : null);
+            if (thing != null && thing.Spawned && thing.Map == map && thing.OccupiedRect().Contains(to))
+            {
+                return destTarget;
+            }
+
+            return new LocalTargetInfo(to);
+        }
+
+        // Start from every destination island and walk the anchor graph backward.
+        // A walk edge stays within a single island. A crossing uses a flat cost,
+        // so the artificial spacing between floors never enters the distance.
+        private static bool TryPlanFirstHop(Map map, List<Pair> list, IntVec3 from, IntVec3 to, int compFrom, HashSet<int> destComps, bool forbidAware, Pawn pawn, bool exact, LocalTargetInfo destTarget, out Building_Door near, out Building_Door far)
+        {
+            near = null;
+            far = null;
+            Dictionary<Building_Door, int> anchorIndices = new Dictionary<Building_Door, int>();
+            List<Building_Door> anchors = new List<Building_Door>();
+            List<int> islands = new List<int>();
+            for (int i = 0; i < list.Count; i++)
+            {
+                Pair pair = list[i];
+                if (pair.a != null && pair.b != null && pair.a.Spawned && pair.b.Spawned)
+                {
+                    AddNode(map, pair.a, forbidAware, anchorIndices, anchors, islands);
+                    AddNode(map, pair.b, forbidAware, anchorIndices, anchors, islands);
+                }
+            }
+
+            int count = anchors.Count;
+            if (count == 0)
+            {
+                return false;
+            }
+
+            if (ABV2Debug.LogTransit)
+            {
+                StringBuilder stringBuilder = new StringBuilder();
+                foreach (int destComp in destComps)
+                {
+                    if (stringBuilder.Length > 0)
+                    {
+                        stringBuilder.Append(", ");
+                    }
+
+                    stringBuilder.Append("isl ").Append(destComp);
+                }
+
+                lastDestCompsText = "{" + stringBuilder?.ToString() + "}";
+                StringBuilder stringBuilder2 = new StringBuilder();
+                for (int j = 0; j < count; j++)
+                {
+                    if (stringBuilder2.Length > 0)
+                    {
+                        stringBuilder2.Append(", ");
+                    }
+
+                    stringBuilder2.Append(anchors[j].Position).Append("=isl ").Append(islands[j]);
+                }
+
+                lastAnchorCompsText = "{" + stringBuilder2?.ToString() + "}";
+            }
+            else
+            {
+                lastDestCompsText = null;
+                lastAnchorCompsText = null;
+            }
+
+            // Estimate both end legs first. Exact mode verifies the winner's legs
+            // with the pawn's real pathfinder, then reranks if the estimates change.
+            float[] seedDistance = new float[count];
+            bool[] seedVerified = new bool[count];
+            float[] walkInDistance = new float[count];
+            bool[] walkInVerified = new bool[count];
+            for (int k = 0; k < count; k++)
+            {
+                seedDistance[k] = (destComps.Contains(islands[k]) ? (anchors[k].Position - to).LengthHorizontal : float.MaxValue);
+                walkInDistance[k] = ((islands[k] == compFrom) ? (anchors[k].Position - from).LengthHorizontal : float.MaxValue);
+            }
+
+            float[] distance = new float[count];
+            bool[] settled = new bool[count];
+            int[] nextTowardSeed = new int[count];
+            int correctionRound = 0;
+            while (true)
+            {
+                for (int l = 0; l < count; l++)
+                {
+                    distance[l] = seedDistance[l];
+                    settled[l] = false;
+                    nextTowardSeed[l] = -1;
+                }
+
+                for (int m = 0; m < count; m++)
+                {
+                    int settledAnchor = -1;
+                    float bestDistance = float.MaxValue;
+                    for (int n = 0; n < count; n++)
+                    {
+                        if (!settled[n] && distance[n] < bestDistance)
+                        {
+                            bestDistance = distance[n];
+                            settledAnchor = n;
+                        }
+                    }
+
+                    if (settledAnchor < 0)
+                    {
+                        break;
+                    }
+
+                    settled[settledAnchor] = true;
+                    for (int walkNeighbor = 0; walkNeighbor < count; walkNeighbor++)
+                    {
+                        if (!settled[walkNeighbor] && islands[walkNeighbor] == islands[settledAnchor])
+                        {
+                            float walkCost = (exact ? WalkEdge(map, anchors[settledAnchor], anchors[walkNeighbor], forbidAware) : (anchors[walkNeighbor].Position - anchors[settledAnchor].Position).LengthHorizontal);
+                            float walkDistance = distance[settledAnchor] + walkCost;
+                            if (walkDistance < distance[walkNeighbor])
+                            {
+                                distance[walkNeighbor] = walkDistance;
+                                nextTowardSeed[walkNeighbor] = settledAnchor;
+                            }
+                        }
+                    }
+
+                    for (int pairIndex = 0; pairIndex < list.Count; pairIndex++)
+                    {
+                        Pair pair2 = list[pairIndex];
+                        Building_Door crossingNeighbor;
+                        if (pair2.a == anchors[settledAnchor])
+                        {
+                            crossingNeighbor = pair2.b;
+                        }
+                        else
+                        {
+                            crossingNeighbor = ((pair2.b == anchors[settledAnchor]) ? pair2.a : null);
+                        }
+
+                        if (crossingNeighbor != null && anchorIndices.TryGetValue(crossingNeighbor, out var value) && value >= 0 && !settled[value])
+                        {
+                            float crossingDistance = distance[settledAnchor] + 7f;
+                            if (crossingDistance < distance[value])
+                            {
+                                distance[value] = crossingDistance;
+                                nextTowardSeed[value] = settledAnchor;
+                            }
+                        }
+                    }
+                }
+
+                float bestTotal = float.MaxValue;
+                int bestNi = -1;
+                int bestFi = -1;
+                for (int candidatePairIndex = 0; candidatePairIndex < list.Count; candidatePairIndex++)
+                {
+                    Pair pair3 = list[candidatePairIndex];
+                    if (pair3.a != null && pair3.b != null && pair3.a.Spawned && pair3.b.Spawned)
+                    {
+                        RankHop(anchorIndices, islands, compFrom, walkInDistance, distance, pair3.a, pair3.b, ref bestTotal, ref bestNi, ref bestFi);
+                        RankHop(anchorIndices, islands, compFrom, walkInDistance, distance, pair3.b, pair3.a, ref bestTotal, ref bestNi, ref bestFi);
+                    }
+                }
+
+                if (bestNi < 0)
+                {
+                    return false;
+                }
+
+                near = anchors[bestNi];
+                far = anchors[bestFi];
+                lastPlanTotal = bestTotal;
+                // Follow the winning chain to the destination-side seed to expose
+                // both the approach anchor and the distance before its last leg.
+                int seedIndex = bestFi;
+                for (int hop = 0; hop < count; hop++)
+                {
+                    if (nextTowardSeed[seedIndex] < 0)
+                    {
+                        break;
+                    }
+
+                    seedIndex = nextTowardSeed[seedIndex];
+                }
+
+                lastPlanSeedAnchor = anchors[seedIndex];
+                lastPlanSeedLeg = seedDistance[seedIndex];
+                if (!exact)
+                {
+                    return true;
+                }
+
+                bool winnerVerified = true;
+                if (!walkInVerified[bestNi])
+                {
+                    walkInVerified[bestNi] = true;
+                    float actualWalkIn = RealPathLen(map, pawn, from, new LocalTargetInfo(anchors[bestNi]));
+                    if (actualWalkIn < 0f)
+                    {
+                        if (ABV2Debug.LogTransit)
+                        {
+                            ABV2Debug.Transit("PLAN: walk-in to " + anchors[bestNi].ThingID + " " + anchors[bestNi].Position.ToString() + " NOT FOUND for " + pawn?.LabelShort + "; candidate excluded");
+                        }
+
+                        walkInDistance[bestNi] = float.MaxValue;
+                        winnerVerified = false;
+                    }
+                    else if (Math.Abs(actualWalkIn - walkInDistance[bestNi]) > 0.5f)
+                    {
+                        if (ABV2Debug.LogTransit)
+                        {
+                            ABV2Debug.Transit("PLAN: walk-in to " + anchors[bestNi].ThingID + " " + anchors[bestNi].Position.ToString() + " corrected " + walkInDistance[bestNi].ToString("0.0") + " -> " + actualWalkIn.ToString("0.0"));
+                        }
+
+                        walkInDistance[bestNi] = actualWalkIn;
+                        winnerVerified = false;
+                    }
+                }
+
+                if (destComps.Contains(islands[bestFi]) && !seedVerified[bestFi])
+                {
+                    seedVerified[bestFi] = true;
+                    float actualSeedDistance = RealPathLen(map, pawn, anchors[bestFi].Position, ProbeTarget(map, to, destTarget));
+                    if (actualSeedDistance < 0f)
+                    {
+                        if (ABV2Debug.LogTransit)
+                        {
+                            ABV2Debug.Transit("PLAN: seed leg from " + anchors[bestFi].ThingID + " " + anchors[bestFi].Position.ToString() + " NOT FOUND for " + pawn?.LabelShort + "; candidate excluded");
+                        }
+
+                        seedDistance[bestFi] = float.MaxValue;
+                        winnerVerified = false;
+                    }
+                    else if (Math.Abs(actualSeedDistance - seedDistance[bestFi]) > 0.5f)
+                    {
+                        if (ABV2Debug.LogTransit)
+                        {
+                            ABV2Debug.Transit("PLAN: seed leg from " + anchors[bestFi].ThingID + " " + anchors[bestFi].Position.ToString() + " corrected " + seedDistance[bestFi].ToString("0.0") + " -> " + actualSeedDistance.ToString("0.0"));
+                        }
+
+                        seedDistance[bestFi] = actualSeedDistance;
+                        winnerVerified = false;
+                    }
+                }
+
+                if (winnerVerified)
+                {
+                    return true;
+                }
+
+                if (correctionRound >= 6)
+                {
+                    break;
+                }
+
+                correctionRound++;
+            }
+
+            if (ABV2Debug.LogTransit)
+            {
+                ABV2Debug.Transit("PLAN: verify budget exhausted after " + 6 + " rounds; shipping current best");
+            }
+
+            return true;
+        }
+
+        private static bool TryGetTransitToTouch(Map map, IntVec3 from, IntVec3 to, int compFrom, bool forbidAware, List<Pair> list, Pawn pawn, bool exact, LocalTargetInfo destTarget, out Building_Door near, out Building_Door far)
+        {
+            near = null;
+            far = null;
+            HashSet<int> hashSet = null;
+            for (int i = 0; i < 8; i++)
+            {
+                IntVec3 intVec = to + GenAdj.AdjacentCells[i];
+                if (!intVec.InBounds(map) || !ABBands.SameBand(map, intVec, to))
+                {
+                    continue;
+                }
+
+                int num = ABBandComponents.ComponentOf(map, intVec, forbidAware);
+                if (num >= 0)
+                {
+                    if (num == compFrom)
+                    {
+                        lastRefusal = TransitRefusal.TouchableFromPawnIsland;
+                        return false;
+                    }
+
+                    if (hashSet == null)
+                    {
+                        hashSet = new HashSet<int>();
+                    }
+
+                    hashSet.Add(num);
+                }
+            }
+
+            if (hashSet == null)
+            {
+                lastRefusal = TransitRefusal.TouchNoStandableNeighbour;
+                return false;
+            }
+
+            lastDestCompCount = hashSet.Count;
+            if (TryPlanFirstHop(map, list, from, to, compFrom, hashSet, forbidAware, pawn, exact, destTarget, out near, out far))
+            {
+                return true;
+            }
+
+            lastRefusal = TransitRefusal.NoLinkChain;
+            return false;
+        }
+
+        public static void CollectPairs(Map map, List<KeyValuePair<Building_Door, Building_Door>> into)
+        {
+            if (map == null || into == null || !byMap.TryGetValue(map, out var value))
+            {
+                return;
+            }
+
+            for (int i = 0; i < value.Count; i++)
+            {
+                Pair pair = value[i];
+                if (pair.a != null && pair.b != null && pair.a.Spawned && pair.b.Spawned)
+                {
+                    into.Add(new KeyValuePair<Building_Door, Building_Door>(pair.a, pair.b));
+                }
+            }
+        }
+
+        public static bool TryEstimateTrip(Map map, IntVec3 from, IntVec3 to, Pawn pawn, out float length, out IntVec3 lastAnchor, out float chainCost)
+        {
+            lastAnchor = IntVec3.Invalid;
+            chainCost = float.MaxValue;
+            if (!TryEstimateTrip(map, from, to, pawn, out length))
+            {
+                return false;
+            }
+
+            if (lastPlanSeedAnchor != null && lastPlanSeedAnchor.Spawned)
+            {
+                lastAnchor = lastPlanSeedAnchor.Position;
+                chainCost = Math.Max(0f, length - lastPlanSeedLeg);
+            }
+
+            return true;
+        }
+
+        public static bool TryEstimateTrip(Map map, IntVec3 from, IntVec3 to, Pawn pawn, out float length)
+        {
+            length = float.MaxValue;
+            if (map == null || !byMap.TryGetValue(map, out var value) || value.Count == 0)
+            {
+                return false;
+            }
+
+            if (!from.InBounds(map) || !to.InBounds(map))
+            {
+                return false;
+            }
+
+            bool forbidAware = ABBandComponents.RespectsForbiddenDoors(pawn);
+            int num = ABBandComponents.ComponentOf(map, from, forbidAware);
+            if (num < 0)
+            {
+                return false;
+            }
+
+            int num2 = ABBandComponents.ComponentOf(map, to, forbidAware);
+            HashSet<int> hashSet;
+            if (num2 >= 0)
+            {
+                if (num2 == num)
+                {
+                    return false;
+                }
+
+                hashSet = new HashSet<int>
+                {
+                    num2
+                };
+            }
+            else
+            {
+                hashSet = null;
+                for (int i = 0; i < 8; i++)
+                {
+                    IntVec3 intVec = to + GenAdj.AdjacentCells[i];
+                    if (!intVec.InBounds(map) || !ABBands.SameBand(map, intVec, to))
+                    {
+                        continue;
+                    }
+
+                    int num3 = ABBandComponents.ComponentOf(map, intVec, forbidAware);
+                    if (num3 >= 0)
+                    {
+                        if (num3 == num)
+                        {
+                            return false;
+                        }
+
+                        if (hashSet == null)
+                        {
+                            hashSet = new HashSet<int>();
+                        }
+
+                        hashSet.Add(num3);
+                    }
+                }
+
+                if (hashSet == null)
+                {
+                    return false;
+                }
+            }
+
+            lastPlanTotal = float.MaxValue;
+            if (!TryPlanFirstHop(map, value, from, to, num, hashSet, forbidAware, pawn, exact: false, default, out var _, out var _))
+            {
+                return false;
+            }
+
+            length = lastPlanTotal;
+            return length < float.MaxValue;
+        }
+
+        public static bool TryGetTransit(Map map, IntVec3 from, IntVec3 to, Pawn pawn, out Building_Door near, out Building_Door far, LocalTargetInfo destTarget = default(LocalTargetInfo))
+        {
+            near = null;
+            far = null;
+            lastRefusal = TransitRefusal.None;
+            lastDestCompCount = 0;
+            if (map == null || !byMap.TryGetValue(map, out var value) || value.Count == 0)
+            {
+                lastRefusal = TransitRefusal.NoPairsOnMap;
+                return false;
+            }
+
+            bool forbidAware = ABBandComponents.RespectsForbiddenDoors(pawn);
+            bool exact = pawn?.CurJob?.def != JobDefOf.GotoWander;
+            int num = ABBandComponents.ComponentOf(map, from, forbidAware);
+            if (num < 0)
+            {
+                lastRefusal = TransitRefusal.PawnHasNoIsland;
+                return false;
+            }
+
+            int num2 = ABBandComponents.ComponentOf(map, to, forbidAware);
+            if (num2 < 0)
+            {
+                return TryGetTransitToTouch(map, from, to, num, forbidAware, value, pawn, exact, destTarget, out near, out far);
+            }
+
+            if (num == num2)
+            {
+                lastRefusal = TransitRefusal.SameIsland;
+                return false;
+            }
+
+            HashSet<int> destComps = new HashSet<int>
+            {
+                num2
+            };
+            lastDestCompCount = 1;
+            if (TryPlanFirstHop(map, value, from, to, num, destComps, forbidAware, pawn, exact, destTarget, out near, out far))
+            {
+                return true;
+            }
+
+            lastRefusal = TransitRefusal.NoLinkChain;
+            return false;
+        }
+
+        internal static string LastRefusalText => lastRefusal switch
+        {
+            TransitRefusal.NoPairsOnMap => "no link pairs on this map",
+            TransitRefusal.PawnHasNoIsland => "pawn is not standing on a walkable island",
+            TransitRefusal.SameIsland => "same island, nothing to segment",
+            TransitRefusal.TouchableFromPawnIsland => "already touchable from the pawn's own island",
+            TransitRefusal.TouchNoStandableNeighbour => "target has no standable neighbour in its own band",
+            TransitRefusal.NoLinkChain => "no chain of links reaches the target island (" + lastDestCompCount + " approach island" + ((lastDestCompCount == 1) ? "" : "s") + " tried)" + ((lastDestCompsText != null) ? (" | sought " + lastDestCompsText) : string.Empty) + ((lastAnchorCompsText != null) ? (" | anchors " + lastAnchorCompsText) : string.Empty),
+            _ => "no reason recorded",
+        };
+
+        private static float lastPlanSeedLeg;
+
+        private static Building_Door lastPlanSeedAnchor;
+
+        private static int lastDestCompCount;
+
+        private static string lastAnchorCompsText;
+
+        private static string lastDestCompsText;
+
+        private static TransitRefusal lastRefusal;
+
+        private static float lastPlanTotal = float.MaxValue;
+
+        private enum TransitRefusal
+        {
+            None,
+            NoPairsOnMap,
+            PawnHasNoIsland,
+            SameIsland,
+            TouchableFromPawnIsland,
+            TouchNoStandableNeighbour,
+            NoLinkChain
+        }
+
     }
 
     /// <summary>
@@ -1145,19 +1272,27 @@ namespace AsAboveSoBelow
             {
                 return;
             }
+
             try
             {
                 ABWormhole.RearmAll(map);
+                rearmFailures = 0;
             }
-            catch (Exception e)
+            catch (Exception ex)
             {
-                // ⚠ THIS FIRES ONCE PER REGION REBUILD. A bare Log.Error here was an
-                // unbounded error stream on a hot event - the same runaway shape as the
-                // per-frame camera clamp. Guard-switched: the stairs stop conducting
-                // (which is honest - a failed re-arm means they are not conducting
-                // anyway), the player is told once, and the settings panel can re-arm it.
-                ABGuard.Disable(ABGuard.Transit, e, "V2 wormhole re-arm");
+                rearmFailures++;
+                if (rearmFailures >= 3)
+                {
+                    ABGuard.Disable(ABGuard.Transit, ex, "V2 wormhole re-arm");
+                    return;
+                }
+
+                Log.WarningOnce("[As above, So below] V2 wormhole re-arm threw (attempt " + rearmFailures + "/" + 3 + "; will retry on the next region rebuild): " + ex, 11218506);
             }
         }
+        private static int rearmFailures;
+
+        private const int MaxConsecutiveRearmFailures = 3;
+
     }
 }

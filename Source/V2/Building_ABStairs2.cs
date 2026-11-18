@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using RimWorld;
 using Verse;
@@ -153,7 +154,15 @@ namespace AsAboveSoBelow
         /// stall: that path is gated on `door.PawnCanOpen(pawn)` being TRUE, so a pawn we
         /// refuse is excluded from the region and never approaches at all.
         /// </summary>
-        public override bool PawnCanOpen(Pawn p) => base.PawnCanOpen(p);
+        public override bool PawnCanOpen(Pawn p)
+        {
+            if (base.PawnCanOpen(p))
+            {
+                return true;
+            }
+
+            return p != null && p.RaceProps != null && p.RaceProps.Animal && !p.RaceProps.predator && p.Faction == null && !p.InAggroMentalState && !p.HostileTo(this);
+        }
 
         /// <summary>No sliding door halves. The def uses MapMeshOnly so the graphic is
         /// PRINTED like any other building - which also means a stairwell on the surface
@@ -238,70 +247,68 @@ namespace AsAboveSoBelow
 
         private void TryEstablish(Map map)
         {
-            ABBandMap bands = ABBands.CompOf(map);
-            if (bands == null || !bands.Banded)
+            ABBandMap aBBandMap = ABBands.CompOf(map);
+            if (aBBandMap == null || !aBBandMap.Banded)
             {
-                // Backstop only: PlaceWorker_ABLinkApproach refuses this at placement.
-                // Reachable via paths that bypass PlaceWorkers (dev spawn, quest spawn).
-                Messages.Message("AB_StairsNoBands".Translate(),
-                    MessageTypeDefOf.RejectInput, false);
+                Messages.Message("AB_StairsNoBands".Translate(), MessageTypeDefOf.RejectInput, historical: false);
                 return;
             }
-            int myBand = bands.BandOf(Position);
 
-            // The elevator serves the whole column; stairs and ladders serve one direction.
-            List<int> targets = new List<int>();
+            int num = aBBandMap.BandOf(Position);
+            List<int> list = new List<int>();
             if (LinksAllLevels)
             {
-                for (int b = 0; b < bands.bandCount; b++)
+                for (int i = 0; i < aBBandMap.bandCount; i++)
                 {
-                    if (b != myBand)
+                    if (i != num)
                     {
-                        targets.Add(b);
+                        list.Add(i);
                     }
                 }
             }
             else
             {
-                targets.Add(myBand + LevelDelta);
+                list.Add(num + LevelDelta);
             }
 
-            List<Building_ABStairs2> established = new List<Building_ABStairs2>();
-            for (int i = 0; i < targets.Count; i++)
+            List<Building_ABStairs2> list2 = new List<Building_ABStairs2>();
+            for (int j = 0; j < list.Count; j++)
             {
-                int targetBand = targets[i];
-                if (!bands.BandExists(targetBand))
+                int num2 = list[j];
+                if (!aBBandMap.BandExists(num2))
                 {
                     if (!LinksAllLevels)
                     {
-                        // Backstop only: PlaceWorker_ABLinkApproach refuses this at
-                        // placement (§29e). Reachable via dev/quest spawns.
-                        Messages.Message("AB_StairsNoLevel".Translate(),
-                            MessageTypeDefOf.RejectInput, false);
+                        Messages.Message("AB_StairsNoLevel".Translate(), MessageTypeDefOf.RejectInput, historical: false);
                     }
+
                     continue;
                 }
-                Building_ABStairs2 cp = EstablishEnd(map, bands, targetBand);
-                if (cp == null)
+
+                if (num2 > num && !ABOrbitRules.LinkMayRise(map, this.OccupiedRect()))
                 {
+                    Messages.Message("AB_OrbitLinkNeedsPlatform".Translate(), MessageTypeDefOf.RejectInput, historical: false);
                     continue;
                 }
-                AddCounterpart(cp);
-                cp.AddCounterpart(this);
-                ABWormhole.Link(this, cp);
-                bands.Open(targetBand);
-                established.Add(cp);
+
+                Building_ABStairs2 building_ABStairs = EstablishEnd(map, aBBandMap, num2);
+                if (building_ABStairs != null)
+                {
+                    AddCounterpart(building_ABStairs);
+                    building_ABStairs.AddCounterpart(this);
+                    ABWormhole.Link(this, building_ABStairs);
+                    aBBandMap.Open(num2);
+                    list2.Add(building_ABStairs);
+                }
             }
 
-            // Full mesh for the elevator: the sky and basement cars link DIRECTLY too, so a
-            // sky-to-basement trip is one transit instead of a hop through the surface.
-            for (int i = 0; i < established.Count; i++)
+            for (int k = 0; k < list2.Count; k++)
             {
-                for (int j = i + 1; j < established.Count; j++)
+                for (int l = k + 1; l < list2.Count; l++)
                 {
-                    established[i].AddCounterpart(established[j]);
-                    established[j].AddCounterpart(established[i]);
-                    ABWormhole.Link(established[i], established[j]);
+                    list2[k].AddCounterpart(list2[l]);
+                    list2[l].AddCounterpart(list2[k]);
+                    ABWormhole.Link(list2[k], list2[l]);
                 }
             }
         }
@@ -310,90 +317,53 @@ namespace AsAboveSoBelow
         /// real footprint), spawn with matching rotation, unfog. Returns null on failure.</summary>
         private Building_ABStairs2 EstablishEnd(Map map, ABBandMap bands, int targetBand)
         {
-            IntVec3 farCell = bands.Translate(Position, targetBand);
-            if (!farCell.InBounds(map))
+            IntVec3 intVec = bands.Translate(Position, targetBand);
+            if (!intVec.InBounds(map))
             {
                 return null;
             }
 
-            // Resolve the counterpart BEFORE carving: the pocket has to be sized from the
-            // far building's actual FOOTPRINT, and until we know its def we do not know how
-            // big that is. (Carving first, with a fixed rect around the centre cell, is what
-            // walled pawns in - see CarveLanding.)
-            ThingDef cpDef = CounterpartDef();
-            if (cpDef == null)
+            ThingDef thingDef = CounterpartDef();
+            if (thingDef == null)
             {
-                Log.Error(ABLog.Tag + " V2: no counterpart stairs def for " + def.defName + ".");
+                Log.Error("[As above, So below] V2: no counterpart stairs def for " + def.defName + ".");
                 return null;
             }
-            Building_ABStairs2 cp = farCell.GetFirstThing<Building_ABStairs2>(map);
-            CellRect farFootprint = cp != null
-                ? cp.OccupiedRect()
-                : GenAdj.OccupiedRect(farCell, Rotation, cpDef.Size);
-            CarveLanding(map, bands, farFootprint, targetBand);
 
-            if (cp == null)
+            Building_ABStairs2 building_ABStairs = intVec.GetFirstThing<Building_ABStairs2>(map);
+            CellRect footprint = building_ABStairs?.OccupiedRect() ?? GenAdj.OccupiedRect(intVec, Rotation, thingDef.Size);
+            CarveLanding(map, bands, footprint, targetBand);
+            if (building_ABStairs == null)
             {
                 spawningCounterpart = true;
                 try
                 {
-                    Thing t = ThingMaker.MakeThing(cpDef, Stuff ?? GenStuff.DefaultStuffFor(cpDef));
-                    // ROTATION MUST MATCH THIS END. GenAdj.AdjustForRotation shifts a
-                    // building's OccupiedRect by a cell for any EVEN dimension:
-                    //     if (size.x % 2 == 0) center.x += num;
-                    //     if (size.z % 2 == 0) center.z += num2;
-                    // The 1x1 ladder and the 3x3 grand stairs are odd on both axes and so are
-                    // rotation-independent - but the 2x2 stairs are even on both. Spawning the
-                    // counterpart with the default Rot4.North while the player places this end
-                    // facing South (defaultPlacingRot) put the two footprints a cell out of
-                    // alignment, even though Position translated 1:1 between bands.
-                    //
-                    // ABWormhole.TryCellPairs then paired cell i to cell i and armed every
-                    // link, so nothing looked broken - but the linked cells were spatially
-                    // offset from the visible stairwell. Which cell a pawn happened to step
-                    // into decided whether the crossing behaved, which is the classic
-                    // "stairs work sometimes" symptom. TryCellPairs documents the matching
-                    // rotation as an invariant; this is the line that makes it true.
-                    cp = (Building_ABStairs2)GenSpawn.Spawn(t, farCell, map, Rotation,
-                        WipeMode.Vanish);
+                    Thing thing = ThingMaker.MakeThing(thingDef, Stuff ?? GenStuff.DefaultStuffFor(thingDef));
                     if (Faction != null)
                     {
-                        cp.SetFaction(Faction);
+                        thing.SetFactionDirect(Faction);
                     }
+
+                    building_ABStairs = (Building_ABStairs2)GenSpawn.Spawn(thing, intVec, map, Rotation);
                 }
                 finally
                 {
                     spawningCounterpart = false;
                 }
             }
-            map.fogGrid.Unfog(farCell);
 
-            // FLOOD the fog away, don't just poke holes in it. CarveLanding unfogs its
-            // apron cell-by-cell, and a per-cell Unfog never propagates - so when a new
-            // link's landing broke into a pre-existing open space (a Biomes! Caverns
-            // cavern above all), the connected area stayed black even though the pawn
-            // standing on the landing could see straight into it.
-            //
-            // ⚠ THE FIRST ATTEMPT AT THIS WAS INERT AND SILENT. It called
-            // FloodFillerFog.FloodUnfog on an apron cell - i.e. on a cell CarveLanding had
-            // ALREADY UNFOGGED four lines earlier - and FloodFill returns immediately when
-            // passCheck(root) fails, which for the fog flood means "root is not fogged".
-            // No error, no log line, nothing revealed, ever. Seed from the fogged frontier
-            // AROUND the pocket instead, and clamp the walk to the band so the flood cannot
-            // wander down the gutter (open air, no edifice, fogged = wide open to a fog
-            // flood) into the neighbouring levels. See ABFogReveal for both traps.
+            map.fogGrid.Unfog(intVec);
             try
             {
-                CellRect pocket = (cp != null ? cp.OccupiedRect()
-                    : GenAdj.OccupiedRect(farCell, Rotation, cpDef.Size))
-                    .ExpandedBy(ABWormholePather.LandingRadius).ClipInsideMap(map);
+                CellRect pocket = (building_ABStairs?.OccupiedRect() ?? GenAdj.OccupiedRect(intVec, Rotation, thingDef.Size)).ExpandedBy(2).ClipInsideMap(map);
                 ABFogReveal.RevealBreach(map, bands, targetBand, pocket);
             }
-            catch (System.Exception e)
+            catch (Exception ex)
             {
-                ABLog.Dev("V2: landing flood-unfog failed (ignored): " + e.Message);
+                ABLog.Dev("V2: landing flood-unfog failed (ignored): " + ex.Message);
             }
-            return cp;
+
+            return building_ABStairs;
         }
 
         private ThingDef CounterpartDef()

@@ -1,3 +1,4 @@
+using System.Text;
 using System;
 using System.Collections.Generic;
 using HarmonyLib;
@@ -68,192 +69,235 @@ namespace AsAboveSoBelow
             {
                 return;
             }
-            ABBandMap bands = ABBands.CompOf(map);
-            if (bands == null || !bands.Banded)
+
+            ABBandMap aBBandMap = ABBands.CompOf(map);
+            if (aBBandMap == null || !aBBandMap.Banded)
             {
                 return;
             }
-            CameraDriver cam = Find.CameraDriver;
-            if (cam == null)
+
+            CameraDriver cameraDriver = Find.CameraDriver;
+            if (cameraDriver == null || !aBBandMap.BandExists(ABBandView.RenderBand(map) - 1))
             {
                 return;
             }
-            // Nothing below the bottom band. Without this the whole pass still ran on the
-            // basement every frame - building a view rect, then walking every spawned pawn
-            // AND every realtime drawable only for each one to fail the bounds test. Pure
-            // waste, and it scaled with colony size on the one band that can never show
-            // anything beneath it.
-            if (!bands.BandExists(ABBandView.CurrentBand(map) - 1))
+
+            int slot = aBBandMap.Slot;
+            int num = ABBandView.RenderBand(map);
+            if (!aBBandMap.AnyUnfoggedBelow(num))
             {
                 return;
             }
-            int slot = bands.Slot;
-            int viewBand = ABBandView.CurrentBand(map);
-            // Fog gate: every rejection below includes a per-thing fog test, so when
-            // every band under the view is fully fogged (the undug-basement common case)
-            // this whole pass - and the realtime pass it ends with - provably draws
-            // nothing. Skip before walking any list. Verdicts are event-driven
-            // (MapEvents.CellFogChanged/MapFogged) and fail open.
-            if (!bands.AnyUnfoggedBelow(viewBand))
-            {
-                return;
-            }
-            // Perf sampling starts AFTER the cheap early-outs above, so the counters
-            // describe frames where a below view actually exists.
-            long perfT0 = ABPerfStats.Now();
-            int perfConsidered = 0;
-            int perfDrawn = 0;
-            // Refills the per-frame budget for first-touch atlas bakes. Must happen once
-            // per pass, not once per pawn, or the budget stops bounding anything.
+
+            long num2 = ABPerfStats.Now();
+            int num3 = 0;
+            int num4 = 0;
             ABBelowRenderCache.BeginFrame();
-            CellRect camView = cam.CurrentViewRect;
-            TerrainGrid terrain = map.terrainGrid;
-            FogGrid fog = map.fogGrid;
-
-            // IReadOnlyList, walked by index: no enumerator boxing on a per-frame path.
-            IReadOnlyList<Pawn> pawns = map.mapPawns.AllPawnsSpawned;
-            for (int i = 0; i < pawns.Count; i++)
+            CellRect currentViewRect = cameraDriver.CurrentViewRect;
+            TerrainGrid terrainGrid = map.terrainGrid;
+            FogGrid fogGrid = map.fogGrid;
+            IReadOnlyList<Pawn> allPawnsSpawned = map.mapPawns.AllPawnsSpawned;
+            for (int i = 0; i < allPawnsSpawned.Count; i++)
             {
-                Pawn p = pawns[i];
-                if (p == null || !p.Spawned)
+                Pawn pawn = allPawnsSpawned[i];
+                if (pawn == null || !pawn.Spawned)
                 {
                     continue;
                 }
-                IntVec3 pos = p.Position;
 
-                // Every rejection is recorded with its REASON when probing. A pawn that is
-                // filtered out before the draw call and a pawn that draws but is then
-                // occluded look IDENTICAL on screen, and they need opposite fixes - one is a
-                // masking bug, the other a draw-order bug. Guessing between them has already
-                // cost one wrong fix (running the pawn through all three DynamicDrawPhases,
-                // which was a real staleness bug but not this one).
-                bool probing = ReportNextPass;
-                // §73: a pawn in its transit-ghost window is drawn by ABStairAnim's own
-                // pass at the origin mouth. Drawing it here too - shrunk, through the
-                // stair opening it just used - would be a second copy of the same pawn.
-                if (ABStairAnim.IsGhosting(p))
+                IntVec3 position = pawn.Position;
+                bool reportNextPass = ReportNextPass;
+                if (ABStairAnim.IsGhosting(pawn))
                 {
-                    if (probing) report.AppendLine("  SKIP " + p.LabelShortCap + " " + pos
-                        + " - transit ghost (drawn by the clip pass)");
+                    if (reportNextPass)
+                    {
+                        StringBuilder stringBuilder = report;
+                        string[] array = new string[5]
+                        {
+                            "  SKIP ",
+                            pawn.LabelShortCap,
+                            " ",
+                            null,
+                            null
+                        };
+                        IntVec3 intVec = position;
+                        array[3] = intVec.ToString();
+                        array[4] = " - transit ghost (drawn by the clip pass)";
+                        stringBuilder.AppendLine(string.Concat(array));
+                    }
+
                     continue;
                 }
-                // ANY band below the view, not just the one directly beneath.
-                //
-                // The candidate rect used to be the view shifted down exactly one Slot, so a
-                // pawn two levels down was never even considered - "pawns disappear on floor
-                // 2 and stay hidden on floor 3". The column is now tested against the view
-                // rect in the VIEWING band and visibility is resolved with the shared
-                // descent rule, so the two agree by construction.
-                int pawnBand = bands.BandOf(pos);
-                if (pawnBand < 0 || pawnBand >= viewBand)
+
+                int num5 = aBBandMap.BandOf(position);
+                if (num5 < 0 || num5 >= num)
                 {
-                    continue; // same band or above: vanilla draws it
-                }
-                perfConsidered++;
-                IntVec3 above = bands.Translate(pos, viewBand);
-                if (!camView.Contains(above))
-                {
-                    if (probing) report.AppendLine("  SKIP " + p.LabelShortCap + " " + pos
-                        + " - column outside the view rect " + camView);
                     continue;
                 }
-                if (fog.IsFogged(pos))
+
+                num3++;
+                IntVec3 intVec2 = aBBandMap.Translate(position, num);
+                if (!currentViewRect.Contains(intVec2))
                 {
-                    if (probing) report.AppendLine("  SKIP " + p.LabelShortCap + " " + pos + " - fogged");
+                    if (reportNextPass)
+                    {
+                        StringBuilder stringBuilder2 = report;
+                        string[] array2 = new string[6]
+                        {
+                            "  SKIP ",
+                            pawn.LabelShortCap,
+                            " ",
+                            null,
+                            null,
+                            null
+                        };
+                        IntVec3 intVec = position;
+                        array2[3] = intVec.ToString();
+                        array2[4] = " - column outside the view rect ";
+                        CellRect cellRect = currentViewRect;
+                        array2[5] = cellRect.ToString();
+                        stringBuilder2.AppendLine(string.Concat(array2));
+                    }
+
                     continue;
                 }
-                if (!above.InBounds(map) || bands.InGutter(above))
+
+                if (fogGrid.IsFogged(position))
                 {
-                    if (probing) report.AppendLine("  SKIP " + p.LabelShortCap + " " + pos
-                        + " - cell above out of bounds / in gutter");
+                    if (reportNextPass)
+                    {
+                        StringBuilder stringBuilder3 = report;
+                        string[] array3 = new string[5]
+                        {
+                            "  SKIP ",
+                            pawn.LabelShortCap,
+                            " ",
+                            null,
+                            null
+                        };
+                        IntVec3 intVec = position;
+                        array3[3] = intVec.ToString();
+                        array3[4] = " - fogged";
+                        stringBuilder3.AppendLine(string.Concat(array3));
+                    }
+
                     continue;
                 }
-                if (!ABBands.TryResolveVisibleBelow(map, bands, above, out IntVec3 seen, out int drop)
-                    || seen.x != pos.x || seen.z != pos.z)
+
+                if (!intVec2.InBounds(map) || aBBandMap.InGutter(intVec2))
                 {
-                    if (probing) report.AppendLine("  SKIP " + p.LabelShortCap + " " + pos
-                        + " - not what this column shows (covered by "
-                        + terrain.TerrainAt(above).defName + ")");
+                    if (reportNextPass)
+                    {
+                        StringBuilder stringBuilder4 = report;
+                        string[] array4 = new string[5]
+                        {
+                            "  SKIP ",
+                            pawn.LabelShortCap,
+                            " ",
+                            null,
+                            null
+                        };
+                        IntVec3 intVec = position;
+                        array4[3] = intVec.ToString();
+                        array4[4] = " - cell above out of bounds / in gutter";
+                        stringBuilder4.AppendLine(string.Concat(array4));
+                    }
+
                     continue;
                 }
-                if (probing)
+
+                if (!ABBands.TryResolveVisibleBelow(map, aBBandMap, intVec2, out var below, out var drop) || below.x != position.x || below.z != position.z)
                 {
-                    report.AppendLine("  DRAW " + p.LabelShortCap + " " + pos
-                        + " posture=" + p.GetPosture()
-                        + " inBed=" + (p.CurrentBed() != null)
-                        + " drawPos.y=" + p.DrawPos.y.ToString("0.000")
-                        + " job=" + (p.CurJob?.def?.defName ?? "none"));
+                    if (reportNextPass)
+                    {
+                        StringBuilder stringBuilder5 = report;
+                        string[] array5 = new string[7]
+                        {
+                            "  SKIP ",
+                            pawn.LabelShortCap,
+                            " ",
+                            null,
+                            null,
+                            null,
+                            null
+                        };
+                        IntVec3 intVec = position;
+                        array5[3] = intVec.ToString();
+                        array5[4] = " - not what this column shows (covered by ";
+                        array5[5] = terrainGrid.TerrainAt(intVec2).defName;
+                        array5[6] = ")";
+                        stringBuilder5.AppendLine(string.Concat(array5));
+                    }
+
+                    continue;
                 }
+
+                if (reportNextPass)
+                {
+                    StringBuilder stringBuilder6 = report;
+                    string[] array6 = new string[12]
+                    {
+                        "  DRAW ",
+                        pawn.LabelShortCap,
+                        " ",
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null
+                    };
+                    IntVec3 intVec = position;
+                    array6[3] = intVec.ToString();
+                    array6[4] = " posture=";
+                    array6[5] = pawn.GetPosture().ToString();
+                    array6[6] = " inBed=";
+                    array6[7] = (pawn.CurrentBed() != null).ToString();
+                    array6[8] = " drawPos.y=";
+                    array6[9] = pawn.DrawPos.y.ToString("0.000");
+                    array6[10] = " job=";
+                    array6[11] = pawn.CurJob?.def?.defName ?? "none";
+                    stringBuilder6.AppendLine(string.Concat(array6));
+                }
+
                 try
                 {
-                    Vector3 loc = p.DrawPos;
-                    loc.z += drop;
-                    // The same depth cue the printed pass applies: shrink by how many levels
-                    // down this pawn is. Position is untouched - the pawn stays plumb over
-                    // its own cell, which is what lets a click land where the sprite is.
-                    float shrink = ABDepthView.ScaleForLevels(slot > 0 ? drop / slot : 1);
-
-                    // Run the SAME three phases vanilla runs for a visible pawn, at our
-                    // translated location - do not just call DrawNowAt.
-                    //
-                    // DrawNowAt only issues DrawPhase.Draw, and RenderPawnAt recomputes
-                    // ONLY when `!results.valid`. A below pawn is culled from the camera's
-                    // view rect, so DynamicDrawManager never gives it EnsureInitialized or
-                    // ParallelPreDraw - yet its results stay flagged valid from whenever it
-                    // was last genuinely on screen. Anything that changes its appearance
-                    // while culled is therefore never picked up: the pawn keeps rendering in
-                    // its old pose. Lying down to sleep is the visible case (a sleeping pawn
-                    // simply never appeared from above), but the same staleness applies to
-                    // rotation, apparel and carried things.
-                    //
-                    // Main thread, called serially: this is the safe way to invoke
-                    // ParallelPreDraw - the thread hazard is in postfixing what the job
-                    // workers call, not in calling it here.
-                    // Armed across all three phases: the bed branch of GetBodyPos is reached
-                    // from ParallelPreDraw as well as Draw, so arming only the draw call
-                    // leaves the cached results holding the untranslated position.
+                    Vector3 drawPos = pawn.DrawPos;
+                    drawPos.z += drop;
+                    float num6 = ABDepthView.ScaleForLevels((slot <= 0) ? 1 : (drop / slot));
                     BelowDrawOffsetZ = drop;
-                    BelowDrawScale = shrink;
-                    // Decides whether THIS pawn may render from the vanilla atlas blit
-                    // instead of walking its whole render tree. Must be armed before the
-                    // phases, because the decision is consumed inside ParallelPreDraw.
-                    ABBelowRenderCache.BeginPawn(p, shrink);
+                    BelowDrawScale = num6;
+                    ABBelowRenderCache.BeginPawn(pawn, num6);
                     try
                     {
-                        p.DynamicDrawPhaseAt(DrawPhase.EnsureInitialized, loc);
-                        p.DynamicDrawPhaseAt(DrawPhase.ParallelPreDraw, loc);
-                        p.DynamicDrawPhaseAt(DrawPhase.Draw, loc);
+                        pawn.DynamicDrawPhaseAt(DrawPhase.EnsureInitialized, drawPos);
+                        pawn.DynamicDrawPhaseAt(DrawPhase.ParallelPreDraw, drawPos);
+                        pawn.DynamicDrawPhaseAt(DrawPhase.Draw, drawPos);
                     }
                     finally
                     {
-                        // Cleared in a finally so a throw mid-draw cannot leave every pawn on
-                        // the map rendering a band too high, or every pawn in the colony
-                        // rendering at 85%, or the whole game's pawns pinned to one cache
-                        // verdict.
                         BelowDrawOffsetZ = 0f;
                         BelowDrawScale = 1f;
                         ABBelowRenderCache.EndPawn();
                     }
-                    perfDrawn++;
+
+                    num4++;
                 }
-                catch (Exception e)
+                catch (Exception ex)
                 {
-                    Log.WarningOnce(ABLog.Tag + " V2 below pawn draw failed for "
-                        + p.LabelShortCap + ": " + e.Message, p.thingIDNumber ^ 762195872);
+                    Log.WarningOnce("[As above, So below] V2 below pawn draw failed for " + pawn.LabelShortCap + ": " + ex.Message, pawn.thingIDNumber ^ 0x2D6E2FA0);
                 }
             }
 
-            int perfRealtime = DrawBelowRealtimeThings(map, bands, camView, viewBand, fog);
-            ABPerfStats.NoteBelowPass(perfConsidered, perfDrawn, perfRealtime,
-                ABPerfStats.Now() - perfT0);
-
+            int realtime = DrawBelowRealtimeThings(map, aBBandMap, currentViewRect, num, fogGrid);
+            ABPerfStats.NoteBelowPass(num3, num4, realtime, ABPerfStats.Now() - num2);
             if (ReportNextPass)
             {
                 ReportNextPass = false;
-                Log.Warning(ABLog.Tag + " V2 below pawn report (view band "
-                    + ABBandView.CurrentBand(map) + ", slot " + slot + ", "
-                    + pawns.Count + " pawns on map):\n"
-                    + (report.Length == 0 ? "  (no pawns considered)" : report.ToString()));
+                Log.Warning("[As above, So below] V2 below pawn report (view band " + ABBandView.CurrentBand(map) + ", slot " + slot + ", " + allPawnsSpawned.Count + " pawns on map):\n" + ((report.Length == 0) ? "  (no pawns considered)" : report.ToString()));
                 report.Length = 0;
             }
         }

@@ -1,3 +1,10 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Reflection;
+using HarmonyLib;
+using UnityEngine;
+using Verse.AI.Group;
 using System.Text;
 using LudeonTK;
 using RimWorld;
@@ -56,287 +63,312 @@ namespace AsAboveSoBelow
                 + ", regionDanger=" + reg.DangerFor(pawn);
         }
 
-        [DebugAction("As above", "AB2: why is this pawn stuck",
-            allowedGameStates = AllowedGameStates.PlayingOnMap)]
+        [DebugAction("As above", "AB2: why is this pawn stuck", allowedGameStates = AllowedGameStates.PlayingOnMap)]
         private static void V2WhyStuck()
         {
             Pawn pawn = Find.Selector?.SingleSelectedThing as Pawn;
-            var sb = new StringBuilder();
-
-            // ⚠ NEVER BAIL SILENTLY FROM A DIAGNOSTIC. This guard used to call
-            // Messages.Message, which is an in-game TOAST and never reaches the log
-            // bridge. From outside the game "the user never ran it" and "it ran and
-            // found nothing" were then indistinguishable, and that ambiguity burned a
-            // whole test cycle chasing a pawn that was never probed. Selecting exactly
-            // one pawn is also the wrong thing to demand while hunting a pawn that is
-            // stuck: the interesting pawn may be on another band, or the click may land
-            // on the level below. No selection now means census the colony, then
-            // auto-pick the pawn that most looks stuck.
+            StringBuilder stringBuilder = new StringBuilder();
             if (pawn == null)
             {
-                Map cur = Find.CurrentMap;
-                if (cur == null)
+                Map currentMap = Find.CurrentMap;
+                if (currentMap == null)
                 {
-                    Log.Warning(ABLog.Tag + " V2 stuck probe: no current map.");
+                    Log.Warning("[As above, So below] V2 stuck probe: no current map.");
                     return;
                 }
-                sb.AppendLine("NO SINGLE PAWN SELECTED. Colony census first, then an "
-                    + "auto-picked target.");
-                var candidates = cur.mapPawns.SpawnedPawnsInFaction(Faction.OfPlayer);
-                Pawn best = null;
-                for (int i = 0; i < candidates.Count; i++)
+
+                stringBuilder.AppendLine("NO SINGLE PAWN SELECTED. Colony census first, then an auto-picked target.");
+                List<Pawn> list = currentMap.mapPawns.SpawnedPawnsInFaction(Faction.OfPlayer);
+                Pawn pawn2 = null;
+                for (int i = 0; i < list.Count; i++)
                 {
-                    Pawn p = candidates[i];
-                    bool pMoving = p.pather != null && p.pather.Moving;
-                    IntVec3 pDest = p.pather != null && p.pather.Destination.IsValid
-                        ? p.pather.Destination.Cell
-                        : IntVec3.Invalid;
-                    sb.AppendLine("  " + p.LabelShortCap + " at " + p.Position
-                        + " band " + ABBands.BandOf(cur, p.Position)
-                        + " | job=" + (p.CurJob?.def?.defName ?? "none")
-                        + " moving=" + pMoving
-                        + " dest=" + (pDest.IsValid
-                            ? pDest + " band " + ABBands.BandOf(cur, pDest)
-                            : "-"));
-                    // Stopped dead while STILL HOLDING a destination is the exact
-                    // signature of the re-issue loop we are hunting.
-                    if (best == null && !pMoving && pDest.IsValid && pDest != p.Position)
+                    Pawn pawn3 = list[i];
+                    bool flag = pawn3.pather != null && pawn3.pather.Moving;
+                    IntVec3 intVec = ((pawn3.pather != null && pawn3.pather.Destination.IsValid) ? pawn3.pather.Destination.Cell : IntVec3.Invalid);
+                    string[] array = new string[12]
                     {
-                        best = p;
+                        "  ",
+                        pawn3.LabelShortCap,
+                        " at ",
+                        pawn3.Position.ToString(),
+                        " band ",
+                        ABBands.BandOf(currentMap, pawn3.Position).ToString(),
+                        " | job=",
+                        pawn3.CurJob?.def?.defName ?? "none",
+                        " moving=",
+                        flag.ToString(),
+                        " dest=",
+                        null
+                    };
+                    string text;
+                    if (!intVec.IsValid)
+                    {
+                        text = "-";
+                    }
+                    else
+                    {
+                        IntVec3 intVec2 = intVec;
+                        text = intVec2.ToString() + " band " + ABBands.BandOf(currentMap, intVec);
+                    }
+
+                    array[11] = text;
+                    stringBuilder.AppendLine(string.Concat(array));
+                    if (pawn2 == null && !flag && intVec.IsValid && intVec != pawn3.Position)
+                    {
+                        pawn2 = pawn3;
                     }
                 }
-                if (best == null && candidates.Count > 0)
+
+                if (pawn2 == null && list.Count > 0)
                 {
-                    best = candidates[0];
-                    sb.AppendLine("  >> nobody matched the stuck signature (stopped while "
-                        + "holding a destination); falling back to the first pawn.");
+                    pawn2 = list[0];
+                    stringBuilder.AppendLine("  >> nobody matched the stuck signature (stopped while holding a destination); falling back to the first pawn.");
                 }
-                if (best == null)
+
+                if (pawn2 == null)
                 {
-                    Log.Warning(ABLog.Tag + " V2 stuck probe:\n" + sb
-                        + "  no player pawns spawned on this map.");
+                    Log.Warning("[As above, So below] V2 stuck probe:\n" + stringBuilder?.ToString() + "  no player pawns spawned on this map.");
                     return;
                 }
-                sb.AppendLine("  >> auto-picked " + best.LabelShortCap);
-                sb.AppendLine();
-                pawn = best;
+
+                stringBuilder.AppendLine("  >> auto-picked " + pawn2.LabelShortCap);
+                stringBuilder.AppendLine();
+                pawn = pawn2;
             }
 
             Map map = pawn.Map;
             if (map == null)
             {
-                Log.Warning(ABLog.Tag + " V2 stuck probe: " + pawn.LabelShortCap
-                    + " is not spawned on a map.");
+                Log.Warning("[As above, So below] V2 stuck probe: " + pawn.LabelShortCap + " is not spawned on a map.");
                 return;
             }
 
-            sb.AppendLine(pawn.LabelShortCap + " at " + pawn.Position
-                + " band " + ABBands.BandOf(map, pawn.Position));
-            sb.AppendLine("  job=" + (pawn.CurJob?.def?.defName ?? "none")
-                + " moving=" + (pawn.pather != null && pawn.pather.Moving)
-                + " carrying=" + (pawn.carryTracker?.CarriedThing?.LabelCap ?? "nothing"));
-            sb.AppendLine("  pendingTransit=" + ABWormholePather.HasPending(pawn));
-
-            LocalTargetInfo dest = pawn.CurJob?.targetA ?? LocalTargetInfo.Invalid;
+            stringBuilder.AppendLine(pawn.LabelShortCap + " at " + pawn.Position.ToString() + " band " + ABBands.BandOf(map, pawn.Position));
+            stringBuilder.AppendLine("  job=" + (pawn.CurJob?.def?.defName ?? "none") + " moving=" + (pawn.pather != null && pawn.pather.Moving) + " carrying=" + (pawn.carryTracker?.CarriedThing?.LabelCap ?? "nothing"));
+            stringBuilder.AppendLine("  pendingTransit=" + ABWormholePather.HasPending(pawn));
+            LocalTargetInfo localTargetInfo = pawn.CurJob?.targetA ?? LocalTargetInfo.Invalid;
             if (pawn.pather != null && pawn.pather.Destination.IsValid)
             {
-                dest = pawn.pather.Destination;
+                localTargetInfo = pawn.pather.Destination;
             }
 
-            if (dest.IsValid)
+            if (localTargetInfo.IsValid)
             {
-                IntVec3 c = dest.Cell;
-                sb.AppendLine("  destination " + c + " band " + ABBands.BandOf(map, c));
-
-                // ⚠ THE MODE MUST MATCH THE JOB. This probe used to hard-code OnCell, which
-                // asks "can the pawn stand ON the target". That is trivially false for a wall
-                // frame or any impassable construction target, so it reported CanReach=False,
-                // NOT FOUND and component -1 all at once on a perfectly healthy job and hid
-                // the real difference. Read the mode the pather is actually using.
+                IntVec3 cell = localTargetInfo.Cell;
+                IntVec3 intVec2 = cell;
+                stringBuilder.AppendLine("  destination " + intVec2.ToString() + " band " + ABBands.BandOf(map, cell));
                 PathEndMode peMode = PathEndMode.Touch;
-                string peModeSrc = "assumed Touch (reflection unavailable)";
+                string text2 = "assumed Touch (reflection unavailable)";
                 if (StuckProbePeModeField != null && pawn.pather != null)
                 {
                     try
                     {
                         peMode = (PathEndMode)StuckProbePeModeField.GetValue(pawn.pather);
-                        peModeSrc = "live from pather";
+                        text2 = "live from pather";
                     }
-                    catch (System.Exception)
+                    catch (Exception)
                     {
-                        // Fail open to Touch: a wrong-but-sane mode beats a dead probe.
                     }
                 }
-                sb.AppendLine("  pather peMode = " + peMode + " (" + peModeSrc + ")");
 
-                // ⚠ THE AUTO-VS-FORCED MATRIX, AND THE WHOLE POINT OF THIS PROBE.
-                // GenConstruct.CanConstruct reaches with
-                //   (PathEndMode.Touch, forced ? Danger.Deadly : pawn.NormalMaxDanger())
-                // and NormalMaxDanger ALSO returns Deadly while FloatMenuMakerMap is building
-                // the right-click menu. So PathEndMode is IDENTICAL on both routes and DANGER
-                // is the only thing that changes. "Won't do it on its own, does it when
-                // forced" is therefore a DANGER verdict until proven otherwise, not a
-                // connectivity failure.
-                bool reachTouchSome = pawn.CanReach(dest, PathEndMode.Touch, Danger.Some);
-                bool reachTouchDeadly = pawn.CanReach(dest, PathEndMode.Touch, Danger.Deadly);
-                Danger normalDanger = pawn.NormalMaxDanger();
-                bool reachModeNormal = pawn.CanReach(dest, peMode, normalDanger);
-                bool reachOnCell = pawn.CanReach(dest, PathEndMode.OnCell, Danger.Deadly);
-                sb.AppendLine("  reachability matrix:");
-                sb.AppendLine("    Touch  + Danger.Some   (NORMAL WORK) = " + reachTouchSome);
-                sb.AppendLine("    Touch  + Danger.Deadly (FORCED)      = " + reachTouchDeadly);
-                sb.AppendLine("    " + peMode + " + NormalMaxDanger (this pawn now) = "
-                    + reachModeNormal + "   [NormalMaxDanger=" + normalDanger + "]");
-                sb.AppendLine("    OnCell + Danger.Deadly (what this probe used to ask) = "
-                    + reachOnCell);
-                if (!reachTouchSome && reachTouchDeadly)
+                stringBuilder.AppendLine("  pather peMode = " + peMode.ToString() + " (" + text2 + ")");
+                bool flag2 = pawn.CanReach(localTargetInfo, PathEndMode.Touch, Danger.Some);
+                bool flag3 = pawn.CanReach(localTargetInfo, PathEndMode.Touch, Danger.Deadly);
+                Danger maxDanger = pawn.NormalMaxDanger();
+                bool flag4 = pawn.CanReach(localTargetInfo, peMode, maxDanger);
+                bool flag5 = pawn.CanReach(localTargetInfo, PathEndMode.OnCell, Danger.Deadly);
+                stringBuilder.AppendLine("  reachability matrix:");
+                stringBuilder.AppendLine("    Touch  + Danger.Some   (NORMAL WORK) = " + flag2);
+                stringBuilder.AppendLine("    Touch  + Danger.Deadly (FORCED)      = " + flag3);
+                stringBuilder.AppendLine("    " + peMode.ToString() + " + NormalMaxDanger (this pawn now) = " + flag4 + "   [NormalMaxDanger=" + maxDanger.ToString() + "]");
+                stringBuilder.AppendLine("    OnCell + Danger.Deadly (what this probe used to ask) = " + flag5);
+                if (!flag2 & flag3)
                 {
-                    sb.AppendLine("    >> DANGER IS THE DIFFERENTIATOR. Normal work refuses this"
-                        + " route and forced accepts the SAME route, which is exactly the"
-                        + " reported symptom. This is NOT a connectivity bug. Region.DangerFor"
-                        + " returns Deadly when room temperature is outside"
-                        + " SafeTemperatureRange expanded by 80C, OR when room.Vacuum > 0.5"
-                        + " and the pawn is concerned by vacuum. The next block says which.");
+                    stringBuilder.AppendLine("    >> DANGER IS THE DIFFERENTIATOR. Normal work refuses this route and forced accepts the SAME route, which is exactly the reported symptom. This is NOT a connectivity bug. Region.DangerFor returns Deadly when room temperature is outside SafeTemperatureRange expanded by 80C, OR when room.Vacuum > 0.5 and the pawn is concerned by vacuum. The next block says which.");
                 }
-                else if (!reachTouchSome && !reachTouchDeadly)
+                else if (!flag2 && !flag3)
                 {
-                    sb.AppendLine("    >> UNREACHABLE AT ANY DANGER LEVEL. Danger is NOT the"
-                        + " cause; this is a real connectivity failure.");
+                    stringBuilder.AppendLine("    >> UNREACHABLE AT ANY DANGER LEVEL. Danger is NOT the cause; this is a real connectivity failure.");
                 }
 
-                // What Region.DangerFor actually reads, for both endpoints.
-                FloatRange safeRange = pawn.SafeTemperatureRange();
-                sb.AppendLine("  danger inputs:");
-                sb.AppendLine("    pawn cell " + pawn.Position + ": "
-                    + StuckProbeDangerLine(map, pawn.Position, pawn));
-                sb.AppendLine("    dest cell " + c + ": "
-                    + StuckProbeDangerLine(map, c, pawn));
-                sb.AppendLine("    SafeTemperatureRange = " + safeRange
-                    + ", expandedBy(80) = " + safeRange.ExpandedBy(80f)
-                    + ", ConcernedByVacuum = " + pawn.ConcernedByVacuum);
+                FloatRange floatRange = pawn.SafeTemperatureRange();
+                stringBuilder.AppendLine("  danger inputs:");
+                stringBuilder.AppendLine("    pawn cell " + pawn.Position.ToString() + ": " + StuckProbeDangerLine(map, pawn.Position, pawn));
+                intVec2 = cell;
+                stringBuilder.AppendLine("    dest cell " + intVec2.ToString() + ": " + StuckProbeDangerLine(map, cell, pawn));
+                string[] array2 = new string[6]
+                {
+                    "    SafeTemperatureRange = ",
+                    null,
+                    null,
+                    null,
+                    null,
+                    null
+                };
+                FloatRange floatRange2 = floatRange;
+                array2[1] = floatRange2.ToString();
+                array2[2] = ", expandedBy(80) = ";
+                array2[3] = floatRange.ExpandedBy(80f).ToString();
+                array2[4] = ", ConcernedByVacuum = ";
+                array2[5] = pawn.ConcernedByVacuum.ToString();
+                stringBuilder.AppendLine(string.Concat(array2));
+                bool flag6 = flag3;
+                bool flag7 = ABBandComponents.RespectsForbiddenDoors(pawn);
+                int num = ABBandComponents.ComponentOf(map, pawn.Position, flag7);
+                int num2 = ABBandComponents.ComponentOf(map, cell, flag7);
+                bool flag8 = ABBands.SameBand(map, pawn.Position, cell);
+                bool flag9 = ABBandComponents.KnownDifferentComponents(map, pawn.Position, cell, flag7);
+                stringBuilder.AppendLine("  component: pawn=" + num + " dest=" + num2 + "  sameBand=" + flag8 + "  knownDifferentIslands=" + flag9 + "  respectsForbiddenDoors=" + flag7);
+                if (flag7)
+                {
+                    stringBuilder.AppendLine("    optimistic (forbid-blind) islands: pawn=" + ABBandComponents.ComponentOf(map, pawn.Position) + " dest=" + ABBandComponents.ComponentOf(map, cell) + "  - if these AGREE while the pair above DISAGREE, a forbidden door is what splits them.");
+                }
 
-                // The permissive answer, for the CanReach-vs-pathfinder signature below.
-                bool canReach = reachTouchDeadly;
+                if (num < 0 || num2 < 0)
+                {
+                    stringBuilder.AppendLine("    >> AN ENDPOINT IS UNWALKABLE OR OFF-BAND (component -1). ComponentOf returns -1 for BOTH cases, and this is NORMAL for a wall frame, a door under construction, or any impassable build target: those are reached with Touch, not OnCell, so -1 here is NOT by itself evidence of a fault. Read the matrix above instead. Segmentation is deliberately DECLINED - unknown must mean leave it alone.");
+                }
+                else if (flag8 && !flag9)
+                {
+                    stringBuilder.AppendLine("    >> SAME ISLAND: no segmentation wanted. If the pawn cannot walk it, the component map disagrees with the pathfinder and THAT is the bug.");
+                }
+                else if (flag8)
+                {
+                    stringBuilder.AppendLine("    >> SAME BAND, DIFFERENT ISLAND: phase 3 SHOULD segment this. See the transit line below.");
+                }
 
-                // §34: the five ways the same-island router can decline, separated. Without
-                // these the failure modes are indistinguishable from outside - "the pawn just
-                // stands there" looks identical whether the component map missed the split,
-                // the router found no wormhole chain, or segmentation was never attempted.
-                // §59: every line below is the PAWN'S view. Probing the optimistic partition
-                // here would have reported "same island, no segmentation wanted" for the
-                // forbidden-door stall - i.e. the probe would have agreed with the bug.
-                bool forbidAware = ABBandComponents.RespectsForbiddenDoors(pawn);
-                int pc = ABBandComponents.ComponentOf(map, pawn.Position, forbidAware);
-                int dc = ABBandComponents.ComponentOf(map, c, forbidAware);
-                bool sameBand = ABBands.SameBand(map, pawn.Position, c);
-                bool knownDiff = ABBandComponents.KnownDifferentComponents(map, pawn.Position,
-                    c, forbidAware);
-                sb.AppendLine("  component: pawn=" + pc + " dest=" + dc
-                    + "  sameBand=" + sameBand + "  knownDifferentIslands=" + knownDiff
-                    + "  respectsForbiddenDoors=" + forbidAware);
-                if (forbidAware)
+                bool flag10 = ABWormhole.TryGetTransit(map, pawn.Position, cell, pawn, out var near, out var far, localTargetInfo);
+                stringBuilder.AppendLine("  TryGetTransit = " + (flag10 ? ("YES via " + near.Position.ToString() + " (comp " + ABBandComponents.ComponentOf(map, near.Position, flag7) + ") -> " + far.Position.ToString() + " (comp " + ABBandComponents.ComponentOf(map, far.Position, flag7) + ")") : ("NONE - " + ABWormhole.LastRefusalText)));
+                stringBuilder.AppendLine("  wormhole pairs on map = " + ABWormhole.PairCount(map));
+                if (num2 < 0)
                 {
-                    sb.AppendLine("    optimistic (forbid-blind) islands: pawn="
-                        + ABBandComponents.ComponentOf(map, pawn.Position) + " dest="
-                        + ABBandComponents.ComponentOf(map, c)
-                        + "  - if these AGREE while the pair above DISAGREE, a forbidden door"
-                        + " is what splits them.");
-                }
-                if (pc < 0 || dc < 0)
-                {
-                    sb.AppendLine("    >> AN ENDPOINT IS UNWALKABLE OR OFF-BAND (component -1). "
-                        + "ComponentOf returns -1 for BOTH cases, and this is NORMAL for a "
-                        + "wall frame, a door under construction, or any impassable build "
-                        + "target: those are reached with Touch, not OnCell, so -1 here is "
-                        + "NOT by itself evidence of a fault. Read the matrix above instead. "
-                        + "Segmentation is deliberately DECLINED - unknown must mean leave "
-                        + "it alone.");
-                }
-                else if (sameBand && !knownDiff)
-                {
-                    sb.AppendLine("    >> SAME ISLAND: no segmentation wanted. If the pawn "
-                        + "cannot walk it, the component map disagrees with the pathfinder "
-                        + "and THAT is the bug.");
-                }
-                else if (sameBand)
-                {
-                    sb.AppendLine("    >> SAME BAND, DIFFERENT ISLAND: phase 3 SHOULD segment "
-                        + "this. See the transit line below.");
-                }
-                bool gotTransit = ABWormhole.TryGetTransit(map, pawn.Position, c, pawn,
-                    out Building_Door tNear, out Building_Door tFar);
-                sb.AppendLine("  TryGetTransit = " + (gotTransit
-                    ? ("YES via " + tNear.Position + " (comp "
-                       + ABBandComponents.ComponentOf(map, tNear.Position, forbidAware) + ") -> "
-                       + tFar.Position + " (comp "
-                       + ABBandComponents.ComponentOf(map, tFar.Position, forbidAware) + ")")
-                    : "NONE - no wormhole chain joins these islands"));
-                sb.AppendLine("  wormhole pairs on map = " + ABWormhole.PairCount(map));
+                    stringBuilder.AppendLine("  destination neighbours (the cells a Touch job stands on):");
+                    int num3 = 0;
+                    for (int j = 0; j < 8; j++)
+                    {
+                        IntVec3 intVec3 = cell + GenAdj.AdjacentCells[j];
+                        if (!intVec3.InBounds(map))
+                        {
+                            intVec2 = intVec3;
+                            stringBuilder.AppendLine("    " + intVec2.ToString() + "  OUT OF BOUNDS");
+                            continue;
+                        }
 
-                PawnPath path = null;
-                bool found = false;
+                        bool flag11 = intVec3.Walkable(map);
+                        int num4 = ABBandComponents.ComponentOf(map, intVec3, flag7);
+                        bool flag12 = ABBands.SameBand(map, intVec3, cell);
+                        if ((flag11 && num4 >= 0) & flag12)
+                        {
+                            num3++;
+                        }
+
+                        Building edifice = intVec3.GetEdifice(map);
+                        string[] array3 = new string[12]
+                        {
+                            "    ",
+                            null,
+                            null,
+                            null,
+                            null,
+                            null,
+                            null,
+                            null,
+                            null,
+                            null,
+                            null,
+                            null
+                        };
+                        intVec2 = intVec3;
+                        array3[1] = intVec2.ToString();
+                        array3[2] = "  walkable=";
+                        array3[3] = flag11.ToString();
+                        array3[4] = "  island=";
+                        array3[5] = num4.ToString();
+                        array3[6] = ((num4 >= 0 && num4 == num) ? " (PAWN'S OWN ISLAND)" : string.Empty);
+                        array3[7] = "  band=";
+                        array3[8] = ABBands.BandOf(map, intVec3).ToString();
+                        array3[9] = (flag12 ? string.Empty : "  <- OTHER BAND, cannot be touched from");
+                        array3[10] = "  edifice=";
+                        array3[11] = ((edifice != null) ? edifice.def.defName : "-");
+                        stringBuilder.AppendLine(string.Concat(array3));
+                    }
+
+                    stringBuilder.AppendLine("    " + num3 + " of 8 are standable, in the target's own band, and have an island. THOSE are the approach islands the planner seeds from - if one of them shares an island with a link anchor and the trip still fails, the island flood and the pathfinder disagree.");
+                }
+
+                PawnPath pawnPath = null;
+                bool flag13 = false;
                 try
                 {
-                    // Same mode the job uses, and the permissive danger so this line reports
-                    // GEOMETRY only. With OnCell it said NOT FOUND for every impassable
-                    // target; with the pawn's normal danger it would just restate the matrix.
-                    path = map.pathFinder.FindPathNow(pawn.Position, dest,
-                        TraverseParms.For(pawn, Danger.Deadly), null, peMode);
-                    found = path != null && path.Found;
-                    sb.AppendLine("  FindPathNow = " + (found
-                        ? "FOUND (" + path.NodesLeftCount + " nodes)"
-                        : "NOT FOUND"));
+                    pawnPath = map.pathFinder.FindPathNow(pawn.Position, localTargetInfo, TraverseParms.For(pawn), null, peMode);
+                    flag13 = pawnPath?.Found ?? false;
+                    stringBuilder.AppendLine("  FindPathNow = " + (flag13 ? ("FOUND (" + pawnPath.NodesLeftCount + " nodes)") : "NOT FOUND"));
                 }
                 finally
                 {
-                    // The pool is small; never leak a probe path.
-                    if (path != null) path.ReleaseToPool();
+                    pawnPath?.ReleaseToPool();
                 }
 
-                // Gated on BOTH conditions. An earlier version printed this whenever CanReach
-                // was true, so it fired on a perfectly healthy pawn with a found path and
-                // asserted a conclusion the data did not support - a diagnostic that lies is
-                // worse than none.
-                if (canReach && !found)
+                if (flag6 && !flag13 && !flag8)
                 {
-                    sb.AppendLine("  >> CanReach(Touch,Deadly)=True with NOT FOUND at the same"
-                        + " mode: the region graph is connected but no walkable route exists"
-                        + " (usually a diagonal-only link past an impassable cell). That is"
-                        + " the re-issue loop.");
+                    stringBuilder.AppendLine("  >> CROSS-BAND: NOT FOUND HERE IS BY DESIGN AND MEANS NOTHING. The pathfinder cannot cross a band, and Patch_PathFinder_ABRejectCrossBandSync answers this probe with the not-found singleton on purpose. The crossing is made by the transit system, so the TryGetTransit line above is the verdict that matters: NONE there, with its reason, is the real failure.");
                 }
-                else if (found)
+                else if (flag6 && !flag13)
                 {
-                    sb.AppendLine("  >> A path EXISTS, so this is not a connectivity failure."
-                        + " If the pawn is not advancing along it, the problem is movement or"
-                        + " repeated re-targeting, not reachability.");
+                    stringBuilder.AppendLine("  >> SAME BAND, CanReach(Touch,Deadly)=True with NOT FOUND at the same mode: the region graph is connected but no walkable route exists (usually a diagonal-only link past an impassable cell). That is the re-issue loop.");
+                }
+                else if (flag13)
+                {
+                    stringBuilder.AppendLine("  >> A path EXISTS, so this is not a connectivity failure. If the pawn is not advancing along it, the problem is movement or repeated re-targeting, not reachability.");
                 }
             }
             else
             {
-                sb.AppendLine("  no valid destination");
+                stringBuilder.AppendLine("  no valid destination");
             }
 
-            // The 8 neighbours: what actually constrains movement off this cell.
-            sb.AppendLine("  neighbours (walkable / terrain / edifice):");
-            for (int i = 0; i < 8; i++)
+            StuckProbeAISection(stringBuilder, pawn, map);
+            stringBuilder.AppendLine("  pawn's own neighbours (walkable / terrain / edifice):");
+            for (int k = 0; k < 8; k++)
             {
-                IntVec3 n = pawn.Position + GenAdj.AdjacentCells[i];
-                if (!n.InBounds(map))
+                IntVec3 intVec4 = pawn.Position + GenAdj.AdjacentCells[k];
+                IntVec3 intVec2;
+                if (!intVec4.InBounds(map))
                 {
-                    sb.AppendLine("    " + n + "  OUT OF BOUNDS");
+                    intVec2 = intVec4;
+                    stringBuilder.AppendLine("    " + intVec2.ToString() + "  OUT OF BOUNDS");
                     continue;
                 }
-                Building edifice = n.GetEdifice(map);
-                sb.AppendLine("    " + n
-                    + "  walkable=" + n.Walkable(map)
-                    + "  terrain=" + map.terrainGrid.TerrainAt(n).defName
-                    + "  edifice=" + (edifice != null ? edifice.def.defName : "-")
-                    + "  band=" + ABBands.BandOf(map, n));
+
+                Building edifice2 = intVec4.GetEdifice(map);
+                string[] array4 = new string[10]
+                {
+                    "    ",
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null
+                };
+                intVec2 = intVec4;
+                array4[1] = intVec2.ToString();
+                array4[2] = "  walkable=";
+                array4[3] = intVec4.Walkable(map).ToString();
+                array4[4] = "  terrain=";
+                array4[5] = map.terrainGrid.TerrainAt(intVec4).defName;
+                array4[6] = "  edifice=";
+                array4[7] = ((edifice2 != null) ? edifice2.def.defName : "-");
+                array4[8] = "  band=";
+                array4[9] = ABBands.BandOf(map, intVec4).ToString();
+                stringBuilder.AppendLine(string.Concat(array4));
             }
 
-            Log.Warning(ABLog.Tag + " V2 stuck probe:\n" + sb);
-            Messages.Message("AB2: stuck probe written to log.",
-                MessageTypeDefOf.TaskCompletion, false);
+            Log.Warning("[As above, So below] V2 stuck probe:\n" + stringBuilder);
+            Messages.Message("AB2: stuck probe written to log.", MessageTypeDefOf.TaskCompletion, historical: false);
         }
 
         /// <summary>
@@ -353,21 +385,14 @@ namespace AsAboveSoBelow
         /// Log.Warning rather than Log.Message on purpose: info level is filtered out of the
         /// bridge, so a diagnostic that has to reach the log must be a warning.
         /// </summary>
-        [DebugAction("As above", "AB2: pathing report",
-            allowedGameStates = AllowedGameStates.PlayingOnMap)]
+        [DebugAction("As above", "AB2: pathing report", allowedGameStates = AllowedGameStates.PlayingOnMap)]
         private static void V2PathingReport()
         {
-            // §60: the wildlife cap rides along here because it is the same question the
-            // rest of this report answers - "did a guard fire, and how often". A counter
-            // nobody can read is indistinguishable from an unimplemented feature (§14).
-            string fauna = "\n  §60 animal ecosystem cap: applied "
-                + Patch_WildAnimalSpawner_ABSliceEcosystem.capsApplied + "x"
-                + ", last scale " + Patch_WildAnimalSpawner_ABSliceEcosystem.lastScale
-                    .ToString("0.000")
-                + " (1.000 means NOT capped: unbanded map, or the getter never ran)";
-            Log.Warning(ABLog.Tag + " " + ABPathBandScope.Report() + fauna);
-            Messages.Message("AB2: pathing report written to log.",
-                MessageTypeDefOf.TaskCompletion, false);
+            string text = "\n  §60 animal ecosystem cap: applied " + Patch_WildAnimalSpawner_ABSliceEcosystem.capsApplied + "x, last scale " + Patch_WildAnimalSpawner_ABSliceEcosystem.lastScale.ToString("0.000") + " (1.000 means NOT capped: unbanded map, or the getter never ran)";
+            int num = ABWormholePather.doomedNoLinkPair + ABWormholePather.doomedCollapsed + ABWormholePather.doomedOther;
+            string text2 = "\n  §183 doomed cross-band StartPath dispatches: " + num + " (vs " + ABWormholePather.segmentedOk + " segmented cleanly)\n      no link pair joins those bands : " + ABWormholePather.doomedNoLinkPair + "\n      entry collapsed onto pawn cell : " + ABWormholePather.doomedCollapsed + "\n      other / declined earlier       : " + ABWormholePather.doomedOther + "\n    handled without a dispatch (post-fix branches):\n      no link pair -> failed fast     : " + ABWormholePather.failedFastNoLink + "\n      already on mouth -> arrived     : " + ABWormholePather.arrivedOnMouth + ((num == 0) ? "\n      (zero is the pass condition - nothing is being handed to vanilla undoable)" : "\n      NON-ZERO: each one costs a wasted path job + a yellow vanilla warning.");
+            Log.Warning("[As above, So below] " + ABPathBandScope.Report() + text + text2);
+            Messages.Message("AB2: pathing report written to log.", MessageTypeDefOf.TaskCompletion, historical: false);
         }
 
         /// <summary>Why the drafted destination ghost did or did not draw. Four causes look
