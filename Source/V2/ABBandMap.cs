@@ -1,4 +1,3 @@
-using System.Threading;
 using System;
 using System.Collections.Generic;
 using RimWorld;
@@ -326,6 +325,10 @@ namespace AsAboveSoBelow
         /// linear scan beats hashing, and Scribe_Collections handles it without ceremony.</summary>
         private List<int> openedBands = new List<int>();
 
+        // Keep the load-side list across Scribe phases. Saving uses a short-lived
+        // snapshot so the map does not retain completed jobs or despawned pawns.
+        private List<ABWormholePather.TransitRecord> transitSave;
+
         public ABBandMap(Map map) : base(map)
         {
         }
@@ -336,30 +339,39 @@ namespace AsAboveSoBelow
         public override void FinalizeInit()
         {
             base.FinalizeInit();
+            // A banded map just became live (fresh generation or load) - give the patch
+            // lifecycle a chance to apply the band temperature postfix before gameplay
+            // reads temperatures. Self-defers to the main thread when this runs on the
+            // loader thread.
             ABPatchLifecycle.Recheck("map-finalize");
+            // Subscribe the below-view fog gate to vanilla's fog events. Verdicts stay
+            // lazy, so anything that happened before this line is simply scanned fresh
+            // on first use.
             HookFogEvents();
+            // FIRST, unconditionally: this instance is the authoritative component, so
+            // repair any cache that latched a mid-load placeholder (see RebindAfterLoad).
             ABBands.RebindAfterLoad(map, this);
             Patch_MixedBiome_ABBandBiomeAt.Forget();
             try
             {
                 Building_ABColumn.ReconcileCarriers(map);
             }
-            catch (Exception ex)
+            catch (Exception error)
             {
-                Log.Error("[As above, So below] V2: carrier reconcile threw (carriers left as-is): " + ex);
+                Log.Error(ABLog.Tag + " V2: carrier reconcile threw: " + error);
             }
 
+            // Defer transit restoration until the tick after all map components are live.
             if (Scribe.mode == LoadSaveMode.Inactive)
             {
                 try
                 {
                     ABWormholePather.QueueRestore(map, transitSave);
                 }
-                catch (Exception ex2)
+                catch (Exception error)
                 {
-                    Log.Error("[As above, So below] V2: transit restore threw (records dropped): " + ex2);
+                    Log.Error(ABLog.Tag + " V2: transit restore failed: " + error);
                 }
-
                 transitSave = null;
             }
 
@@ -367,63 +379,114 @@ namespace AsAboveSoBelow
             {
                 return;
             }
-
             ABWormholeRearmHook.Register(map);
+            // Same event, same reason: RegionsRoomsChanged is the only cheap, truthful signal
+            // that regions moved. See the banner in ABBandComponents.
             ABBandComponents.Register(map);
+
+            // REPAIR THE SKY BAND BEFORE ANYTHING LOOKS AT IT.
+            //
+            // Placed here rather than in a load hook because this is the first point at
+            // which the damage for THIS load has already happened: Map.FinalizeLoading
+            // respawns every building first, and every one of those re-registers with the
+            // edifice grid and re-fires ABSkySync (see the load note in that file). Running
+            // earlier would repair a map that is about to be broken again.
+            //
+            // Map.FinalizeInit calls components LAST, after RebuildAllRegionsAndRooms, so
+            // the AB_WallTop -> AB_MountainTop rows change passability after the region
+            // build - TerrainGrid.SetTerrain's own change effects handle that incrementally,
+            // and the queued RegenerateEverythingNow still runs after this.
             try
             {
                 ABSkySync.RepairAfterLoad(map, this);
             }
-            catch (Exception ex3)
+            catch (System.Exception e)
             {
-                Log.Error("[As above, So below] V2: sky-sync repair threw (map left as-is): " + ex3);
+                Log.Error(ABLog.Tag + " V2: sky-sync repair threw (map left as-is): " + e);
             }
 
 #if RIMWORLD_17
-            ABPollutionCount.ClearPollutedAir(map);
+            ABPollutionCount.ClearPollutionFromInvalidTerrain(map);
 #endif
             ABGLBiomeGridSync.Sync(map, this, "finalize-init");
+
+            // Always open on the ground floor. Runs for a new colony AND for a loaded save,
+            // so a save taken while looking at the sky or the basement still comes back to
+            // the surface. The camera has to be moved explicitly rather than left to the
+            // band clamp: with free camera panning enabled there IS no clamp, so a restored
+            // camera position one band away would otherwise leave the player staring at
+            // black space with no obvious way back.
             viewBand = surfaceBand;
+
+            // The camera move MUST be deferred to the main thread. FinalizeInit runs on a
+            // LongEvent WORKER thread during load, and CameraDriver.MapPosition reads the
+            // Unity transform - a cross-thread Unity API call that throws. The first
+            // version did this inline inside a silent catch, so on every LOAD the exception
+            // was swallowed and the camera was never moved: with free panning enabled there
+            // is no clamp to rescue it either, so the restored camera sat in the old band's
+            // coordinates while viewBand said 'surface', the view-rect clip drew only the
+            // surface band, and the player loaded into empty void - reported as "camera
+            // clamping breaks on reload". ExecuteWhenFinished runs after load on the main
+            // thread, which is the standard pattern for exactly this.
             Map m = map;
-            LongEventHandler.ExecuteWhenFinished(() =>
+            LongEventHandler.ExecuteWhenFinished(delegate
             {
                 try
                 {
-                    if (m != null && Find.Maps != null && Find.Maps.Contains(m) && Find.CurrentMap == m)
+                    if (m == null || Find.Maps == null || !Find.Maps.Contains(m)
+                        || Find.CurrentMap != m)
                     {
-                        Vector3 vector = ((m.rememberedCameraPos != null) ? m.rememberedCameraPos.rootPos : Find.CameraDriver.MapPosition.ToVector3());
-                        IntVec3 c = new IntVec3(Mathf.RoundToInt(vector.x), 0, Mathf.RoundToInt(vector.z));
-                        if (!c.InBounds(m) || BandOf(c) != surfaceBand)
+                        return; // map gone, or not the one on screen - nothing to fix
+                    }
+                    // Judge by the REMEMBERED camera position, not the live camera. Vanilla
+                    // restores map.rememberedCameraPos itself during load, and the ordering
+                    // between that restore and this deferred delegate is not ours to rely
+                    // on - reading the live camera mid-restore judged a transient position.
+                    // rememberedCameraPos is the authoritative answer either way.
+                    Vector3 remembered = m.rememberedCameraPos != null
+                        ? m.rememberedCameraPos.rootPos
+                        : Find.CameraDriver.MapPosition.ToVector3();
+                    IntVec3 look = new IntVec3(Mathf.RoundToInt(remembered.x), 0,
+                        Mathf.RoundToInt(remembered.z));
+                    if (look.InBounds(m) && BandOf(look) == surfaceBand)
+                    {
+                        return; // saved looking at the surface: vanilla's restore is right
+                    }
+                    // Saved looking at another band. viewBand has been forced to the
+                    // surface, so the restored position would show the wrong band (or void
+                    // with free panning). Land on the COLONISTS, like vanilla does at game
+                    // start - a translated abstract column meant nothing to the player
+                    // (reported: "camera does not land on pawns as expected").
+                    Pawn anchor = null;
+                    foreach (Pawn p in m.mapPawns.FreeColonistsSpawned)
+                    {
+                        if (BandOf(p.Position) == surfaceBand)
                         {
-                            Pawn pawn = null;
-                            foreach (Pawn item in m.mapPawns.FreeColonistsSpawned)
-                            {
-                                if (BandOf(item.Position) == surfaceBand)
-                                {
-                                    pawn = item;
-                                    break;
-                                }
-
-                                pawn = pawn ?? item;
-                            }
-
-                            if (pawn != null)
-                            {
-                                ABBandView.JumpTo(m, pawn.Position);
-                            }
-                            else
-                            {
-                                IntVec3 c2 = (c.InBounds(m) ? Translate(c, surfaceBand) : RectOfBand(surfaceBand).CenterCell);
-                                if (c2.InBounds(m))
-                                {
-                                    Find.CameraDriver.SetRootPosAndSize(new Vector3((float)c2.x + 0.5f, 0f, (float)c2.z + 0.5f), Find.CameraDriver.ZoomRootSize);
-                                }
-                            }
+                            anchor = p;
+                            break;
                         }
+                        anchor = anchor ?? p;
+                    }
+                    if (anchor != null)
+                    {
+                        ABBandView.JumpTo(m, anchor.Position);
+                        return;
+                    }
+                    // No colonists at all: translate the remembered column into the surface
+                    // band so at least the neighbourhood is familiar.
+                    IntVec3 moved = look.InBounds(m)
+                        ? Translate(look, surfaceBand)
+                        : RectOfBand(surfaceBand).CenterCell;
+                    if (moved.InBounds(m))
+                    {
+                        Find.CameraDriver.SetRootPosAndSize(
+                            new Vector3(moved.x + 0.5f, 0f, moved.z + 0.5f),
+                            Find.CameraDriver.ZoomRootSize);
                     }
                 }
                 catch
                 {
+                    // Camera positioning is cosmetic; never let it break load.
                 }
             });
         }
@@ -523,18 +586,21 @@ namespace AsAboveSoBelow
             base.ExposeData();
             if (Scribe.mode == LoadSaveMode.Saving)
             {
+                List<ABWormholePather.TransitRecord> snapshot = null;
                 try
                 {
-                    transitSave = ABWormholePather.CollectForSave(map);
+                    snapshot = ABWormholePather.CollectForSave(map);
                 }
-                catch (Exception ex)
+                catch (Exception error)
                 {
-                    Log.Error("[As above, So below] V2: transit collect threw (records not saved): " + ex);
-                    transitSave = null;
+                    Log.Error(ABLog.Tag + " V2: transit collect threw (records not saved): " + error);
                 }
+                Scribe_Collections.Look(ref snapshot, "AB2_transits", LookMode.Deep);
             }
-
-            Scribe_Collections.Look(ref transitSave, "AB2_transits", LookMode.Deep);
+            else
+            {
+                Scribe_Collections.Look(ref transitSave, "AB2_transits", LookMode.Deep);
+            }
             Scribe_Values.Look(ref bandCount, "AB2_bandCount", 1);
             Scribe_Values.Look(ref bandHeight, "AB2_bandHeight", 0);
             Scribe_Values.Look(ref surfaceBand, "AB2_surfaceBand", 0);
@@ -548,7 +614,5 @@ namespace AsAboveSoBelow
                 openedBands = new List<int>();
             }
         }
-        private List<ABWormholePather.TransitRecord> transitSave;
-
     }
 }

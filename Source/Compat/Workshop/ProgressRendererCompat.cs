@@ -143,10 +143,10 @@ public static class ProgressRendererCompat
 
     private static int TargetBand(Map map, ABBandMap bands)
     {
-        return ((ABMod.Settings != null) ? ABMod.Settings.progressRendererLevel : 0) switch
+        return (ABMod.Settings?.progressRendererLevel ?? LevelTopmost) switch
         {
-            1 => bands.surfaceBand,
-            2 => ABBandView.CurrentBand(map),
+            LevelSurface => bands.surfaceBand,
+            LevelViewed => ABBandView.CurrentBand(map),
             _ => bands.bandCount - 1,
         };
     }
@@ -159,7 +159,7 @@ public static class ProgressRendererCompat
             return false;
         }
 
-        if (Environment.TickCount - pinnedAtMs > 10000)
+        if (Environment.TickCount - pinnedAtMs > PinWatchdogMs)
         {
             if (UnityData.IsInMainThread)
             {

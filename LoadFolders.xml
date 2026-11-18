@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- The root entry is required. It provides the shared defs, textures and
+     languages. Each game version also loads its own assembly and patches. -->
 <loadFolders>
   <v1.6>
     <li>/</li>

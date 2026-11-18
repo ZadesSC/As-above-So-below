@@ -145,6 +145,8 @@ namespace AsAboveSoBelow
                         continue;
                     }
 
+                    // Order the front tile so the pawn does not walk back onto the link
+                    // after landing. An elevator or blocked front tile uses the link itself.
                     IntVec3 dest = ABLinkApproach.DisembarkCell(building_ABStairs);
                     if (!dest.IsValid)
                     {

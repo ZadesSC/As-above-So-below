@@ -1,4 +1,5 @@
 #if RIMWORLD_17
+using System;
 using System.Runtime.CompilerServices;
 using HarmonyLib;
 using Verse;
@@ -63,20 +64,27 @@ namespace AsAboveSoBelow
             }
         }
 
-        internal static void ClearPollutedAir(Map map)
+        internal static void ClearPollutionFromInvalidTerrain(Map map)
         {
-            PollutionGrid grid = map.pollutionGrid;
-            if (grid == null || grid.TotalPollution == 0)
+            try
             {
-                return;
-            }
-
-            foreach (IntVec3 cell in CellRect.WholeMap(map))
-            {
-                if (grid.IsPolluted(cell) && map.terrainGrid.TerrainAt(cell) == ABDefOf.AB_OpenAir)
+                PollutionGrid grid = map.pollutionGrid;
+                if (grid == null || grid.TotalPollution == 0)
                 {
-                    grid.SetPolluted(cell, false, true);
+                    return;
                 }
+
+                foreach (IntVec3 cell in CellRect.WholeMap(map))
+                {
+                    if (grid.IsPolluted(cell) && !map.terrainGrid.TerrainAt(cell).canBePolluted)
+                    {
+                        grid.SetPolluted(cell, false, true);
+                    }
+                }
+            }
+            catch (Exception error)
+            {
+                Log.Warning(ABLog.Tag + " Could not clear pollution from invalid terrain during load: " + error);
             }
         }
     }
@@ -84,16 +92,27 @@ namespace AsAboveSoBelow
     [HarmonyPatch(typeof(PollutionGrid), nameof(PollutionGrid.TotalPollutionPercent), MethodType.Getter)]
     internal static class Patch_PollutionGrid_ABCachedPollutableCount
     {
+        private static bool cacheDisabled;
+
         private static bool Prefix(PollutionGrid __instance, Map ___map, ref float __result)
         {
-            if (!ABBands.Banded(___map))
+            if (cacheDisabled || !ABBands.Banded(___map))
             {
                 return true;
             }
 
-            int count = ABPollutionCount.Get(___map);
-            __result = count == 0 ? 0f : (float)__instance.TotalPollution / count;
-            return false;
+            try
+            {
+                int count = ABPollutionCount.Get(___map);
+                __result = count == 0 ? 0f : (float)__instance.TotalPollution / count;
+                return false;
+            }
+            catch (Exception error)
+            {
+                cacheDisabled = true;
+                Log.Warning(ABLog.Tag + " Pollution cache disabled for this session. Using the game scan: " + error);
+                return true;
+            }
         }
     }
 }

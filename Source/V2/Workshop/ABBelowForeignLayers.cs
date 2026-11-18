@@ -167,17 +167,15 @@ internal static class ABBelowForeignLayers
 
                         Revive(map, sectionLayer);
                         sectionLayer.Regenerate();
-                        goto IL_0214;
                     }
                     catch (Exception e)
                     {
                         Log.WarningOnce("[As above, So below] V2: " + sectionLayer.GetType().Name + " threw while drawing the level below; that dressing is skipped.\n" + Describe(e), sectionLayer.GetType().Name.GetHashCode());
                         proxy.layers[j] = null;
+                        continue;
                     }
 
-                    continue;
-                    IL_0214:
-                        List<LayerSubMesh> subMeshes = sectionLayer.subMeshes;
+                    List<LayerSubMesh> subMeshes = sectionLayer.subMeshes;
                     for (int k = 0; k < subMeshes.Count; k++)
                     {
                         LayerSubMesh layerSubMesh = subMeshes[k];

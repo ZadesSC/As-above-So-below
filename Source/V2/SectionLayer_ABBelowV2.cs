@@ -99,82 +99,84 @@ namespace AsAboveSoBelow
             }
 
             Map map = section.map;
-            ABBandMap aBBandMap = ABBands.CompOf(map);
-            if (aBBandMap == null || !aBBandMap.Banded)
+            ABBandMap bands = ABBands.CompOf(map);
+            if (bands == null || !bands.Banded)
             {
                 return;
             }
 
             try
             {
-                int slot = aBBandMap.Slot;
-                TerrainDef aB_OpenAir = ABDefOf.AB_OpenAir;
+                int slot = bands.Slot;
+                TerrainDef openAir = ABDefOf.AB_OpenAir;
                 TerrainGrid terrainGrid = map.terrainGrid;
                 FogGrid fogGrid = map.fogGrid;
                 ThingGrid thingGrid = map.thingGrid;
-                float y = AltitudeLayer.Terrain.AltitudeFor();
-                float altitude = AltitudeLayer.TerrainScatter.AltitudeFor();
-                float y2 = AltitudeLayer.FogOfWar.AltitudeFor();
-                bool flag = ABV2Debug.DrawBelowAirMask && !ABSpaceBackdrop.HasWorldBackdrop(map);
-                bool flag2 = false;
+                float maskAltitude = AltitudeLayer.Terrain.AltitudeFor();
+                float dressingAltitude = AltitudeLayer.TerrainScatter.AltitudeFor();
+                // Fog sits above below-view wall sprites so the border keeps its depth.
+                float fogAltitude = AltitudeLayer.FogOfWar.AltitudeFor();
+                bool drawOpaqueMask = ABV2Debug.DrawBelowAirMask && !ABSpaceBackdrop.HasWorldBackdrop(map);
+                bool hasGeometry = false;
                 printedThisPass.Clear();
                 foreignDrops.Clear();
-                foreach (IntVec3 item in section.CellRect)
+                foreach (IntVec3 viewCell in section.CellRect)
                 {
-                    if (!item.InBounds(map) || aBBandMap.BandOf(item) <= 0 || aBBandMap.InGutter(item) || !ABBands.ShowsBelow(terrainGrid.TerrainAt(item)))
+                    if (!viewCell.InBounds(map) || bands.BandOf(viewCell) <= 0 || bands.InGutter(viewCell) || !ABBands.ShowsBelow(terrainGrid.TerrainAt(viewCell)))
                     {
                         continue;
                     }
 
-                    bool flag3 = ABBands.TryResolveVisibleBelow(map, aBBandMap, item, out var below, out var drop);
-                    bool flag4 = flag3 && fogGrid.IsFogged(below);
-                    if (!flag3 | flag4)
+                    bool hasVisibleCell = ABBands.TryResolveVisibleBelow(map, bands, viewCell, out var below, out var drop);
+                    bool belowIsFogged = hasVisibleCell && fogGrid.IsFogged(below);
+                    if (!hasVisibleCell | belowIsFogged)
                     {
                         if (!ABV2Debug.DrawBelowAirMask)
                         {
                             continue;
                         }
 
-                        if (flag)
+                        if (drawOpaqueMask)
                         {
-                            AddQuad(GetSubMesh(AirMaskMat), item, y, OpaqueWhite);
+                            AddQuad(GetSubMesh(AirMaskMat), viewCell, maskAltitude, OpaqueWhite);
                         }
 
-                        if (flag4)
+                        if (belowIsFogged)
                         {
-                            EmitBelowFogFan(map, aBBandMap, fogGrid, below, item, y2);
+                            EmitBelowFogFan(map, bands, fogGrid, below, viewCell, fogAltitude);
                             if (slot > 0 && drop > slot)
                             {
-                                SectionLayer_ABMountainCap.EmitMassRepresentationAt(this, map, below, drop, altitude);
+                                SectionLayer_ABMountainCap.EmitMassRepresentationAt(this, map, below, drop, dressingAltitude);
                             }
                         }
 
-                        flag2 = true;
+                        hasGeometry = true;
                         continue;
                     }
 
                     if (ABV2Debug.DrawBelowTerrain)
                     {
                         foreignDrops.Add(drop);
-                        int num = BuildDepthStack(map, aBBandMap, terrainGrid, fogGrid, below);
-                        bool flag5 = false;
-                        bool flag6 = false;
-                        for (int num2 = num - 1; num2 >= 0; num2--)
+                        // Print deeper floors first so an eroded rim reveals real geometry.
+                        int depthCount = BuildDepthStack(map, bands, terrainGrid, fogGrid, below);
+                        bool printedTerrain = false;
+                        bool hasOpaqueBase = false;
+                        for (int depthIndex = depthCount - 1; depthIndex >= 0; depthIndex--)
                         {
-                            flag5 |= PrintBelowTerrain(map, terrainGrid, depthCell[num2], item, altitude, slot, num2, num, flag6, out var laidOpaque);
-                            flag6 |= laidOpaque;
+                            printedTerrain |= PrintBelowTerrain(map, terrainGrid, depthCell[depthIndex], viewCell, dressingAltitude, slot, depthIndex, depthCount, hasOpaqueBase, out var laidOpaque);
+                            hasOpaqueBase |= laidOpaque;
                         }
 
-                        if (!flag5 & flag)
+                        if (!printedTerrain & drawOpaqueMask)
                         {
-                            AddQuad(GetSubMesh(AirMaskMat), item, y, OpaqueWhite);
+                            AddQuad(GetSubMesh(AirMaskMat), viewCell, maskAltitude, OpaqueWhite);
                         }
                     }
 
-                    flag2 = true;
+                    hasGeometry = true;
                     if (ABV2Debug.DrawBelowAirMask)
                     {
-                        EmitBelowFogFan(map, aBBandMap, fogGrid, below, item, y2);
+                        EmitBelowFogFan(map, bands, fogGrid, below, viewCell, fogAltitude);
                     }
 
                     if (!ABV2Debug.DrawBelowThings)
@@ -182,12 +184,14 @@ namespace AsAboveSoBelow
                         continue;
                     }
 
-                    List<Thing> list = thingGrid.ThingsListAtFast(below);
-                    for (int i = 0; i < list.Count; i++)
+                    // Different view cells can project the same multi-cell object here.
+                    // Keep one print per object even when those cells have different depths.
+                    List<Thing> things = thingGrid.ThingsListAtFast(below);
+                    for (int i = 0; i < things.Count; i++)
                     {
-                        Thing thing = list[i];
+                        Thing thing = things[i];
                         DrawerType drawerType = thing.def.drawerType;
-                        if ((drawerType == DrawerType.MapMeshOnly || drawerType == DrawerType.MapMeshAndRealTime) && (thing.def.seeThroughFog || !fogGrid.IsFogged(thing.Position)) && !AdaptiveStorageCompat.HidesFromSectionLayer(thing, map) && IsPrintAnchor(thing, below, map, aBBandMap, terrainGrid, aB_OpenAir, drop) && printedThisPass.Add(thing))
+                        if ((drawerType == DrawerType.MapMeshOnly || drawerType == DrawerType.MapMeshAndRealTime) && (thing.def.seeThroughFog || !fogGrid.IsFogged(thing.Position)) && !AdaptiveStorageCompat.HidesFromSectionLayer(thing, map) && IsPrintAnchor(thing, below, map, bands, terrainGrid, openAir, drop) && printedThisPass.Add(thing))
                         {
                             try
                             {
@@ -204,12 +208,12 @@ namespace AsAboveSoBelow
                     }
                 }
 
-                if (ABBelowForeignLayers.Emit(this, map, aBBandMap, section, foreignDrops))
+                if (ABBelowForeignLayers.Emit(this, map, bands, section, foreignDrops))
                 {
-                    flag2 = true;
+                    hasGeometry = true;
                 }
 
-                if (flag2)
+                if (hasGeometry)
                 {
                     FinalizeMesh(MeshParts.All);
                 }

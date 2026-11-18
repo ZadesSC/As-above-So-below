@@ -37,12 +37,46 @@ namespace AsAboveSoBelow
             public Building_Door near;
             public Building_Door far;
             public int expiresAtTick;
+
+            /// <summary>§78c: the cell ON the link that the pawn is walking to, or Invalid
+            /// when no usable one exists. Standing here means standing on the stair art,
+            /// which is where the clip is allowed to start.</summary>
             public IntVec3 entryCell;
+
+            /// <summary>
+            /// §85.19 LEG ONE'S DESTINATION: the tile in FRONT of the opening, off the
+            /// footprint. Invalid when there isn't a usable one, and then the walk is the
+            /// single leg it always was.
+            ///
+            /// ⚠⚠ WHY A SECOND LEG EXISTS AT ALL. Setting the destination to the mouth cell
+            /// does NOT constrain which side the pawn enters it from - RimWorld has no notion
+            /// of an approach direction, so a pawn coming from the east steps onto the mouth
+            /// through the handrail and the field report is "the pathing line goes through
+            /// the side of the stairs". Two legs is the only way to say "come round to the
+            /// front": walk to the tile in front, THEN take one cardinal step in.
+            /// </summary>
             public IntVec3 approachCell;
+
+            /// <summary>True once the one-cell step onto the mouth has been dispatched, so it
+            /// is issued exactly once.</summary>
             public bool legTwo;
+
+            /// <summary>When the record was made, for the approach-patience backstop.</summary>
             public int startedTick;
-            public Job job;
+
+            /// <summary>
+            /// First tick the pawn was within ArriveRadius of the near anchor; 0 until then.
+            ///
+            /// ⚠⚠ §85.14 THIS EXISTS BECAUSE THE PATIENCE WAS MEASURED FROM THE WRONG
+            /// EVENT. It used startedTick - the tick the transit was RECORDED, i.e. when the
+            /// pawn was ordered, often a long walk away - while its own banner said "within
+            /// two seconds of GETTING CLOSE". Any pawn more than ~7 cells from the stairwell
+            /// therefore arrived with the patience ALREADY expired, and was carried on the
+            /// first tick it came within ArriveRadius (3) of the anchor - from whichever side
+            /// it happened to be walking past, without ever reaching its entry cell.
+            /// </summary>
             public int nearSinceTick;
+            public Job job;
         }
 
         /// <summary>
@@ -221,7 +255,6 @@ namespace AsAboveSoBelow
             holding.Clear();
             tmpHoldDone.Clear();
             tmpHoldFire.Clear();
-            tmpHoldAdopt.Clear();
             List<Map> list = Current.Game?.Maps;
             for (int num = restoreQueue.Count - 1; num >= 0; num--)
             {
@@ -279,7 +312,7 @@ namespace AsAboveSoBelow
                 return false;
             }
 
-            IntVec3 intVec = dest.Cell;
+            IntVec3 pawnTarget = dest.Cell;
             if (dest.HasThing && dest.Thing != null && dest.Thing.Spawned)
             {
                 Thing thing = dest.Thing;
@@ -288,57 +321,37 @@ namespace AsAboveSoBelow
                     IntVec3 interactionCell = thing.InteractionCell;
                     if (interactionCell.InBounds(map))
                     {
-                        intVec = interactionCell;
+                        pawnTarget = interactionCell;
                     }
                 }
-                else if ((peMode == PathEndMode.Touch || peMode == PathEndMode.ClosestTouch) && (thing.def.size.x > 1 || thing.def.size.z > 1) && !ABBands.SameBand(map, pawn.Position, intVec))
+                else if ((peMode == PathEndMode.Touch || peMode == PathEndMode.ClosestTouch) && (thing.def.size.x > 1 || thing.def.size.z > 1) && !ABBands.SameBand(map, pawn.Position, pawnTarget))
                 {
-                    foreach (IntVec3 item in thing.OccupiedRect())
+                    foreach (IntVec3 occupiedCell in thing.OccupiedRect())
                     {
-                        if (item.InBounds(map) && ABBands.SameBand(map, pawn.Position, item))
+                        if (occupiedCell.InBounds(map) && ABBands.SameBand(map, pawn.Position, occupiedCell))
                         {
-                            intVec = item;
+                            pawnTarget = occupiedCell;
                             break;
                         }
                     }
                 }
             }
 
-            if (ABBands.SameBand(map, pawn.Position, intVec) && !ABBandComponents.KnownDifferentComponents(map, pawn.Position, intVec, pawn))
+            if (ABBands.SameBand(map, pawn.Position, pawnTarget) && !ABBandComponents.KnownDifferentComponents(map, pawn.Position, pawnTarget, pawn))
             {
-                bool flag = false;
-                if (pending.TryGetValue(pawn.thingIDNumber, out var value))
+                bool isActiveLeg = false;
+                if (pending.TryGetValue(pawn.thingIDNumber, out var currentTransit))
                 {
-                    flag = intVec == value.entryCell || intVec == value.approachCell || (value.near != null && value.near.Spawned && value.near.OccupiedRect().Contains(intVec));
-                    if (!flag)
+                    isActiveLeg = pawnTarget == currentTransit.entryCell || pawnTarget == currentTransit.approachCell || (currentTransit.near != null && currentTransit.near.Spawned && currentTransit.near.OccupiedRect().Contains(pawnTarget));
+                    if (!isActiveLeg)
                     {
-                        string[] array = new string[9]
-                        {
-                            "SUPERSEDED ",
-                            pawn.LabelShort,
-                            ": new same-band order to ",
-                            null,
-                            null,
-                            null,
-                            null,
-                            null,
-                            null
-                        };
-                        IntVec3 intVec2 = intVec;
-                        array[3] = intVec2.ToString();
-                        array[4] = " is not this transit's leg (mouth ";
-                        intVec2 = value.entryCell;
-                        array[5] = intVec2.ToString();
-                        array[6] = ", approach ";
-                        intVec2 = value.approachCell;
-                        array[7] = intVec2.ToString();
-                        array[8] = "); dropping the record";
-                        ABV2Debug.Transit(string.Concat(array));
+                        ABV2Debug.Transit($"SUPERSEDED {pawn.LabelShort}: new same-band order to {pawnTarget}"
+                            + $" is not this transit's leg (mouth {currentTransit.entryCell}, approach {currentTransit.approachCell}); dropping the record");
                         Clear(pawn);
                     }
                 }
 
-                if (!flag)
+                if (!isActiveLeg)
                 {
                     lastReal.Remove(pawn.thingIDNumber);
                 }
@@ -346,51 +359,21 @@ namespace AsAboveSoBelow
                 return false;
             }
 
-            bool flag2 = ABWormhole.TryGetTransit(map, pawn.Position, intVec, pawn, out var near, out var far, dest);
+            bool foundRoute = ABWormhole.TryGetTransit(map, pawn.Position, pawnTarget, pawn, out var near, out var far, dest);
             if (ABV2Debug.LogTransit)
             {
-                string[] array2 = new string[21]
-                {
-                    pawn.LabelShort,
-                    " ",
-                    pawn.Position.ToString(),
-                    " (band ",
-                    ABBands.BandOf(map, pawn.Position).ToString(),
-                    ") comp ",
-                    ABBandComponents.ComponentOf(map, pawn.Position, pawn).ToString(),
-                    " -> ",
-                    null,
-                    null,
-                    null,
-                    null,
-                    null,
-                    null,
-                    null,
-                    null,
-                    null,
-                    null,
-                    null,
-                    null,
-                    null
-                };
-                IntVec3 intVec2 = intVec;
-                array2[8] = intVec2.ToString();
-                array2[9] = " (band ";
-                array2[10] = ABBands.BandOf(map, intVec).ToString();
-                array2[11] = ") comp ";
-                array2[12] = ABBandComponents.ComponentOf(map, intVec, pawn).ToString();
-                array2[13] = " | forbidAware=";
-                array2[14] = ABBandComponents.RespectsForbiddenDoors(pawn).ToString();
-                array2[15] = " | job=";
-                array2[16] = pawn.CurJob?.def?.defName ?? "none";
-                array2[17] = " | pairs=";
-                array2[18] = ABWormhole.PairCount(map).ToString();
-                array2[19] = " | transit=";
-                array2[20] = (flag2 ? ("YES via " + near.Position.ToString() + " -> " + far.Position.ToString()) : ("NONE - " + ABWormhole.LastRefusalText + "; pawn will try to walk it and fail"));
-                ABV2Debug.Transit(string.Concat(array2));
+                string route = foundRoute
+                    ? $"YES via {near.Position} -> {far.Position}"
+                    : $"NONE - {ABWormhole.LastRefusalText}; pawn will try to walk it and fail";
+                ABV2Debug.Transit($"{pawn.LabelShort} {pawn.Position} (band {ABBands.BandOf(map, pawn.Position)})"
+                    + $" comp {ABBandComponents.ComponentOf(map, pawn.Position, pawn)}"
+                    + $" -> {pawnTarget} (band {ABBands.BandOf(map, pawnTarget)})"
+                    + $" comp {ABBandComponents.ComponentOf(map, pawnTarget, pawn)}"
+                    + $" | forbidAware={ABBandComponents.RespectsForbiddenDoors(pawn)}"
+                    + $" | job={pawn.CurJob?.def?.defName ?? "none"} | pairs={ABWormhole.PairCount(map)} | transit={route}");
             }
 
-            if (!flag2)
+            if (!foundRoute)
             {
                 Clear(pawn);
                 lastOutcome = SegmentOutcome.FailedFast;
@@ -399,56 +382,55 @@ namespace AsAboveSoBelow
                 return false;
             }
 
-            IntVec3 intVec3 = EntryCellFor(near, pawn);
-            IntVec3 intVec4 = ApproachCellFor(near, pawn, intVec3);
-            ABV2Debug.Transit("  entry cell for " + near.def.defName + " " + near.Rotation.ToString() + " at " + near.Position.ToString() + " = " + (intVec3.IsValid ? intVec3.ToString() : "INVALID - walking to the building"));
+            IntVec3 mouth = EntryCellFor(near, pawn);
+            IntVec3 approach = ApproachCellFor(near, pawn, mouth);
+            ABV2Debug.Transit("  entry cell for " + near.def.defName + " " + near.Rotation.ToString() + " at " + near.Position.ToString() + " = " + (mouth.IsValid ? mouth.ToString() : "INVALID - walking to the building"));
             everSegmented.Add(pawn.thingIDNumber);
-            Job curJob = pawn.CurJob;
+            Job order = pawn.CurJob;
             pending[pawn.thingIDNumber] = new Transit
             {
                 realDest = dest,
                 realPeMode = peMode,
                 near = near,
                 far = far,
-                entryCell = intVec3,
-                approachCell = intVec4,
+                entryCell = mouth,
+                approachCell = approach,
                 startedTick = Find.TickManager.TicksGame,
-                expiresAtTick = Find.TickManager.TicksGame + 4000,
-                job = curJob
+                expiresAtTick = Find.TickManager.TicksGame + TransitTimeoutTicks,
+                job = order
             };
-            int retries = ((lastReal.TryGetValue(pawn.thingIDNumber, out var value2) && value2.job != null && value2.job == curJob) ? value2.retries : 0);
+            int retries = ((lastReal.TryGetValue(pawn.thingIDNumber, out var previousLeg) && previousLeg.job != null && previousLeg.job == order) ? previousLeg.retries : 0);
             lastReal[pawn.thingIDNumber] = new RealLeg
             {
                 dest = dest,
                 peMode = peMode,
-                job = curJob,
+                job = order,
                 retries = retries
             };
             IntVec3 position = pawn.Position;
-            if (intVec4.IsValid && intVec4 == position)
+            if (approach.IsValid && approach == position)
             {
-                intVec4 = IntVec3.Invalid;
+                approach = IntVec3.Invalid;
             }
 
-            if (intVec3.IsValid && intVec3 == position)
+            if (mouth.IsValid && mouth == position)
             {
-                intVec3 = IntVec3.Invalid;
+                mouth = IntVec3.Invalid;
             }
 
-            LocalTargetInfo localTargetInfo;
-            if (intVec4.IsValid)
+            LocalTargetInfo firstLeg;
+            if (approach.IsValid)
             {
-                localTargetInfo = new LocalTargetInfo(intVec4);
+                firstLeg = new LocalTargetInfo(approach);
             }
             else
             {
-                localTargetInfo = (intVec3.IsValid ? new LocalTargetInfo(intVec3) : ((LocalTargetInfo)near));
+                firstLeg = (mouth.IsValid ? new LocalTargetInfo(mouth) : ((LocalTargetInfo)near));
             }
 
-            if (localTargetInfo.Cell == position)
+            if (firstLeg.Cell == position)
             {
-                IntVec3 intVec2 = position;
-                ABV2Debug.Transit("  StartPath rewritten -> own cell " + intVec2.ToString() + " (already on the mouth); arrival fires synchronously and begins the crossing");
+                ABV2Debug.Transit($"  StartPath rewritten -> own cell {position} (already on the mouth); arrival begins the crossing");
                 dest = new LocalTargetInfo(position);
                 peMode = PathEndMode.OnCell;
                 lastOutcome = SegmentOutcome.Rewritten;
@@ -456,22 +438,10 @@ namespace AsAboveSoBelow
                 return true;
             }
 
-            dest = localTargetInfo;
+            dest = firstLeg;
             peMode = PathEndMode.OnCell;
-            LocalTargetInfo localTargetInfo2 = dest;
-            string text = localTargetInfo2.ToString();
-            string text2;
-            if (!intVec4.IsValid)
-            {
-                text2 = "  [single leg]";
-            }
-            else
-            {
-                IntVec3 intVec2 = intVec3;
-                text2 = "  [leg 1 of 2, mouth is " + intVec2.ToString() + "]";
-            }
-
-            ABV2Debug.Transit("  StartPath rewritten -> " + text + " (OnCell)" + text2);
+            string legDescription = approach.IsValid ? $"  [leg 1 of 2, mouth is {mouth}]" : "  [single leg]";
+            ABV2Debug.Transit($"  StartPath rewritten -> {dest} (OnCell){legDescription}");
             lastOutcome = SegmentOutcome.Rewritten;
             return true;
         }
@@ -678,19 +648,19 @@ namespace AsAboveSoBelow
                         continue;
                     }
 
-                    bool flag = value.entryCell.IsValid && pawn.Position == value.entryCell;
-                    if (!flag && value.entryCell.IsValid && value.approachCell.IsValid && !value.legTwo && pawn.Position == value.approachCell)
+                    bool onEntry = value.entryCell.IsValid && pawn.Position == value.entryCell;
+                    if (!onEntry && value.entryCell.IsValid && value.approachCell.IsValid && !value.legTwo && pawn.Position == value.approachCell)
                     {
                         tmpLegTwo.Add(new KeyValuePair<Pawn, int>(pawn, item.Key));
                         continue;
                     }
 
-                    bool flag2 = pawn.pather == null || !pawn.pather.Moving;
-                    bool flag3 = value.nearSinceTick != 0 && ticksGame - value.nearSinceTick > 300;
-                    bool flag4 = value.approachCell.IsValid && pawn.Position == value.approachCell;
-                    if (flag | flag2 | flag3)
+                    bool stoppedShort = pawn.pather == null || !pawn.pather.Moving;
+                    bool outOfPatience = value.nearSinceTick != 0 && ticksGame - value.nearSinceTick > 300;
+                    bool onApproach = value.approachCell.IsValid && pawn.Position == value.approachCell;
+                    if (onEntry || stoppedShort || outOfPatience)
                     {
-                        ABV2Debug.Transit("CARRY " + pawn.LabelShort + " at " + pawn.Position.ToString() + " | entryCell=" + (value.entryCell.IsValid ? value.entryCell.ToString() : "INVALID (never rewritten)") + " | onEntry=" + flag + " stoppedShort=" + flag2 + " outOfPatience=" + flag3 + " | nearSince=" + ((value.nearSinceTick == 0) ? "this tick" : (ticksGame - value.nearSinceTick + "t")) + " | moving=" + (pawn.pather != null && pawn.pather.Moving) + " | legTwo=" + value.legTwo + " onApproach=" + flag4 + " | dest=" + ((pawn.pather != null) ? pawn.pather.Destination.ToString() : "none"));
+                        ABV2Debug.Transit("CARRY " + pawn.LabelShort + " at " + pawn.Position.ToString() + " | entryCell=" + (value.entryCell.IsValid ? value.entryCell.ToString() : "INVALID (never rewritten)") + " | onEntry=" + onEntry + " stoppedShort=" + stoppedShort + " outOfPatience=" + outOfPatience + " | nearSince=" + ((value.nearSinceTick == 0) ? "this tick" : (ticksGame - value.nearSinceTick + "t")) + " | moving=" + (pawn.pather != null && pawn.pather.Moving) + " | legTwo=" + value.legTwo + " onApproach=" + onApproach + " | dest=" + ((pawn.pather != null) ? pawn.pather.Destination.ToString() : "none"));
                         tmpDone.Add(item.Key);
                         tmpCarry.Add(new KeyValuePair<Pawn, Transit>(pawn, value));
                     }
@@ -708,18 +678,7 @@ namespace AsAboveSoBelow
                 {
                     value2.legTwo = true;
                     pending[tmpLegTwo[i].Value] = value2;
-                    string[] array = new string[6]
-                    {
-                        "LEG2 ",
-                        key.LabelShort,
-                        " at ",
-                        key.Position.ToString(),
-                        " -> mouth ",
-                        null
-                    };
-                    IntVec3 entryCell = value2.entryCell;
-                    array[5] = entryCell.ToString();
-                    ABV2Debug.Transit(string.Concat(array));
+                    ABV2Debug.Transit($"LEG2 {key.LabelShort} at {key.Position} -> mouth {value2.entryCell}");
                     try
                     {
                         key.pather.StartPath(new LocalTargetInfo(value2.entryCell), PathEndMode.OnCell);
@@ -1062,55 +1021,46 @@ namespace AsAboveSoBelow
                     continue;
                 }
 
+                // BeginCrossing updates a hold only when the new job has actually
+                // requested the same connector pair. A cancelled or unrelated job has
+                // no authority to move the pawn or reuse the old final destination.
                 if (pawn.CurJob != value.job)
                 {
-                    Map map = pawn.Map;
-                    LocalTargetInfo localTargetInfo = ((pawn.pather != null) ? pawn.pather.Destination : LocalTargetInfo.Invalid);
-                    if (localTargetInfo.IsValid && map != null && localTargetInfo.Cell.InBounds(map) && ABBands.SameBand(map, pawn.Position, localTargetInfo.Cell) && localTargetInfo.Cell != pawn.Position && !value.near.OccupiedRect().Contains(localTargetInfo.Cell))
-                    {
-                        tmpHoldDone.Add(item.Key);
-                        ABStairAnim.Clear(pawn);
-                        ABV2Debug.Transit("HOLD CANCELLED for " + pawn.LabelShort + " (job changed mid-clip to a same-level order " + localTargetInfo.Cell.ToString() + "); no teleport");
-                        continue;
-                    }
-
-                    value.job = pawn.CurJob;
-                    tmpHoldAdopt.Add(new KeyValuePair<int, Crossing>(item.Key, value));
-                    ABV2Debug.Transit("HOLD ADOPTED by " + pawn.LabelShort + "'s new job " + (pawn.CurJob?.def?.defName ?? "none") + " (same crossing wanted)");
+                    tmpHoldDone.Add(item.Key);
+                    ABStairAnim.Clear(pawn);
+                    ABV2Debug.Transit("HOLD CANCELLED for " + pawn.LabelShort + " (job changed mid-clip); no teleport");
+                    continue;
                 }
 
-                int num = value.fireAtTick - ticksGame;
-                if (num <= 0 || num > 300 || pawn.Position != value.holdCell)
+                int ticksRemaining = value.fireAtTick - ticksGame;
+                if (ticksRemaining <= 0 || ticksRemaining > MaxHoldTicks || pawn.Position != value.holdCell)
                 {
                     tmpHoldDone.Add(item.Key);
                     tmpHoldFire.Add(value);
                 }
             }
 
-            for (int i = 0; i < tmpHoldAdopt.Count; i++)
+            foreach (int pawnId in tmpHoldDone)
             {
-                if (holding.ContainsKey(tmpHoldAdopt[i].Key))
-                {
-                    holding[tmpHoldAdopt[i].Key] = tmpHoldAdopt[i].Value;
-                }
+                holding.Remove(pawnId);
             }
 
-            tmpHoldAdopt.Clear();
-            for (int j = 0; j < tmpHoldDone.Count; j++)
+            foreach (Crossing crossing in tmpHoldFire)
             {
-                holding.Remove(tmpHoldDone[j]);
-            }
-
-            for (int k = 0; k < tmpHoldFire.Count; k++)
-            {
-                Crossing crossing = tmpHoldFire[k];
                 try
                 {
-                    CarryNow(crossing.pawn, new Transit { near = crossing.near, far = crossing.far, realDest = crossing.realDest, realPeMode = crossing.realPeMode });
+                    CarryNow(crossing.pawn, new Transit
+                    {
+                        near = crossing.near,
+                        far = crossing.far,
+                        realDest = crossing.realDest,
+                        realPeMode = crossing.realPeMode,
+                    });
                 }
-                catch (Exception ex)
+                catch (Exception error)
                 {
-                    Log.ErrorOnce("[As above, So below] V2: held carry threw for " + crossing.pawn.LabelShortCap + ": " + ex, crossing.pawn.thingIDNumber ^ 0x2D6E2FE0);
+                    Log.ErrorOnce(ABLog.Tag + " V2: held carry threw for " + crossing.pawn.LabelShortCap
+                        + ": " + error, crossing.pawn.thingIDNumber ^ 0x2D6E2FE0);
                     crossing.pawn.jobs?.EndCurrentJob(JobCondition.Errored);
                 }
             }
@@ -1123,47 +1073,76 @@ namespace AsAboveSoBelow
         /// straight from Carry (no clip) or from TickCrossings when the hold expires.</summary>
         private static void CarryNow(Pawn pawn, Transit t)
         {
-            IntVec3 intVec = LandingCell(pawn, t.far);
-            string[] array = new string[10]
-            {
-                "TRANSITED ",
-                pawn.LabelShort,
-                " ",
-                t.near.Position.ToString(),
-                " -> ",
-                null,
-                null,
-                null,
-                null,
-                null
-            };
-            IntVec3 intVec2 = intVec;
-            array[5] = intVec2.ToString();
-            array[6] = " (anchor ";
-            array[7] = t.far.Position.ToString();
-            array[8] = "); resuming to ";
-            array[9] = t.realDest.Cell.ToString();
-            ABV2Debug.Transit(string.Concat(array));
-            pawn.Position = intVec;
-            pawn.Notify_Teleported(endCurrentJob: false);
-            ABFogReveal.RevealArrival(pawn, intVec);
-            CarryRopees(pawn, t.near, intVec);
-            ABStairAnim.NotifyCarried(pawn, t.far, intVec);
+            IntVec3 landing = LandingCell(pawn, t.far);
+            ABV2Debug.Transit("TRANSITED " + pawn.LabelShort + " " + t.near.Position
+                + " -> " + landing + " (anchor " + t.far.Position + ")"
+                + "; resuming to " + t.realDest.Cell);
+            pawn.Position = landing;
+            pawn.Notify_Teleported(false, true);
+            // Walking through a door reveals what is on the other side of it. The transit is
+            // a teleport, so neither vanilla's door hook nor anything else fires here - see
+            // ABFogReveal.RevealArrival for why both halves of the vanilla path miss.
+            ABFogReveal.RevealArrival(pawn, landing);
+            // Cosmetic only, and deliberately AFTER the move: flips the §78 clip to its
+            // emerge half, anchored on the FAR link's own axis and art offset. Never a gate
+            // on the carry itself. See the banner on ABStairAnim.
+            ABStairAnim.NotifyCarried(pawn, t.far, landing);
+            // A camera locked to this pawn (Perspective Shift avatar, follow-selected)
+            // treats its transit as the player's own level change. No-op for everyone else.
             ABBandView.FollowTransit(pawn);
             ABTransitVisuals.Clear(pawn);
-            if (t.realDest.HasThing && (t.realDest.ThingDestroyed || !t.realDest.Thing.Spawned))
+            // The real destination was captured when the trip STARTED, and the walk to the
+            // stairwell takes time - the target can die, be hauled away or be deconstructed
+            // in the meantime. Resuming onto a destroyed thing makes vanilla log
+            // "pathing to destroyed thing" and fail the pather.
+            bool destGone = t.realDest.HasThing
+                && (t.realDest.ThingDestroyed || !t.realDest.Thing.Spawned);
+            if (destGone)
             {
-                ABV2Debug.Transit("  destination gone mid-transit; stopping at " + t.far.Position.ToString());
+                // Land at the far anchor and let the job re-evaluate from there.
+                ABV2Debug.Transit("  destination gone mid-transit; stopping at " + t.far.Position);
                 pawn.jobs?.EndCurrentJob(JobCondition.Incompletable);
             }
             else if (t.realDest.IsValid)
             {
+                // ⚠⚠ NO "ALREADY THERE" SHORTCUT HERE. EVERY EXIT FROM THIS METHOD MUST
+                // EITHER RE-DISPATCH THE PATHER OR END THE JOB.
+                //
+                // This used to be guarded with `&& !pawn.Position.Equals(t.realDest.Cell)`,
+                // on the reasonable-sounding grounds that a pawn standing on its destination
+                // has nothing left to walk. It does not - but its JOB has not been told.
+                // Notify_Teleported above runs Pawn_PathFollower.Notify_Teleported_Int ->
+                // StopDead(), which releases the path and sets moving=false WITHOUT
+                // notifying the JobDriver. A toil with ToilCompleteMode.PatherArrival is
+                // completed only by a pushed Notify_PatherArrived, so skipping the dispatch
+                // left a live job on a dead pather: the pawn stood at the stairwell forever
+                // and only a draft/undraft (jobs.StopAll) freed it.
+                //
+                // It fired exactly when realDest IS the far anchor, because LandingCell then
+                // preferred the anchor's own cell whenever it was free - i.e. every "go down
+                // the stairs" order, which is how it was reported. Reported for mechs, but
+                // nothing here is mech-specific; any pawn ordered onto a stairwell could hang.
+                //
+                // ⚠ §85 MADE THAT CASE RARER, NOT GONE, AND THE GUARD MUST STAY. Arrivals now
+                // land in FRONT of the opening, so a pawn ordered onto the stairs usually has
+                // one real step left to walk - but the fallback chain can still return the
+                // anchor when the whole mouth is blocked, and that is the exact shape that
+                // wedged. A landing that happens to equal the destination must keep going
+                // through StartPath.
+                //
+                // Handing the case to vanilla is both shorter and more correct: StartPath
+                // opens with `if (AtDestinationPosition()) { PatherArrived(); return; }`, so
+                // an already-arrived pawn gets a REAL arrival - through our own PatherArrived
+                // prefix, which no-ops because the record was already removed in phase 2 -
+                // and the toil completes. An unreachable destination becomes PatherFailed,
+                // which ends the job honestly instead of wedging it.
                 pawn.pather?.StartPath(t.realDest, t.realPeMode);
             }
             else
             {
-                intVec2 = intVec;
-                ABV2Debug.Transit("  destination no longer valid; ending job at " + intVec2.ToString());
+                // Unreachable in practice (TrySegment only records a valid destination) but
+                // it must not become a third silent exit if that ever changes.
+                ABV2Debug.Transit("  destination no longer valid; ending job at " + landing);
                 pawn.jobs?.EndCurrentJob(JobCondition.Incompletable);
             }
         }
@@ -1207,18 +1186,7 @@ namespace AsAboveSoBelow
             {
                 value.legTwo = true;
                 pending[pawn.thingIDNumber] = value;
-                string[] array = new string[6]
-                {
-                    "LEG2-ON-ARRIVAL ",
-                    pawn.LabelShort,
-                    " at ",
-                    pawn.Position.ToString(),
-                    " -> mouth ",
-                    null
-                };
-                IntVec3 entryCell = value.entryCell;
-                array[5] = entryCell.ToString();
-                ABV2Debug.Transit(string.Concat(array));
+                ABV2Debug.Transit($"LEG2-ON-ARRIVAL {pawn.LabelShort} at {pawn.Position} -> mouth {value.entryCell}");
                 pawn.pather.StartPath(new LocalTargetInfo(value.entryCell), PathEndMode.OnCell);
                 return true;
             }
@@ -1281,18 +1249,7 @@ namespace AsAboveSoBelow
                 Pawn pawn2 = list[i];
                 if (pawn2 != null && pawn2 != pawn && pawn2.Spawned && pawn2.Map == map && pawn2.Position.InHorDistOf(near.Position, 4f) && CellFinder.TryFindRandomCellNear(landing, map, 2, (IntVec3 c) => c.InBounds(map) && c.Standable(map) && c.GetFirstPawn(map) == null && ABBands.SameBand(map, c, landing), out var result))
                 {
-                    string[] array = new string[6]
-                    {
-                        "  ropee ",
-                        pawn2.LabelShort,
-                        " carried with ",
-                        pawn.LabelShort,
-                        " -> ",
-                        null
-                    };
-                    IntVec3 intVec = result;
-                    array[5] = intVec.ToString();
-                    ABV2Debug.Transit(string.Concat(array));
+                    ABV2Debug.Transit($"  ropee {pawn2.LabelShort} carried with {pawn.LabelShort} -> {result}");
                     pawn2.Position = result;
                     pawn2.Notify_Teleported(endCurrentJob: false);
                     ABFogReveal.RevealArrival(pawn2, result);
@@ -1575,7 +1532,6 @@ namespace AsAboveSoBelow
 
         private static Pawn doomedPawn;
 
-        private static readonly List<KeyValuePair<int, Crossing>> tmpHoldAdopt = new List<KeyValuePair<int, Crossing>>();
 
         private static readonly FieldInfo WantBeginNextToilField = AccessTools.Field(typeof(JobDriver), "wantBeginNextToil");
 

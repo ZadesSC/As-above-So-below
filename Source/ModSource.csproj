@@ -15,6 +15,9 @@
     <LangVersion>latest</LangVersion>
     <!-- Publish hygiene: emit only the dll, never a pdb, into the shipped Assemblies folder. -->
     <GenerateDependencyFile>false</GenerateDependencyFile>
+    <!-- The DLLs are committed with their source, so embedding the preceding
+         checkout's commit would make rebuilding this commit change the DLLs. -->
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
     <DebugType>none</DebugType>
     <DebugSymbols>false</DebugSymbols>
   </PropertyGroup>

@@ -694,24 +694,27 @@ namespace AsAboveSoBelow
             return new LocalTargetInfo(to);
         }
 
+        // Start from every destination island and walk the anchor graph backward.
+        // A walk edge stays within a single island. A crossing uses a flat cost,
+        // so the artificial spacing between floors never enters the distance.
         private static bool TryPlanFirstHop(Map map, List<Pair> list, IntVec3 from, IntVec3 to, int compFrom, HashSet<int> destComps, bool forbidAware, Pawn pawn, bool exact, LocalTargetInfo destTarget, out Building_Door near, out Building_Door far)
         {
             near = null;
             far = null;
-            Dictionary<Building_Door, int> dictionary = new Dictionary<Building_Door, int>();
-            List<Building_Door> list2 = new List<Building_Door>();
-            List<int> list3 = new List<int>();
+            Dictionary<Building_Door, int> anchorIndices = new Dictionary<Building_Door, int>();
+            List<Building_Door> anchors = new List<Building_Door>();
+            List<int> islands = new List<int>();
             for (int i = 0; i < list.Count; i++)
             {
                 Pair pair = list[i];
                 if (pair.a != null && pair.b != null && pair.a.Spawned && pair.b.Spawned)
                 {
-                    AddNode(map, pair.a, forbidAware, dictionary, list2, list3);
-                    AddNode(map, pair.b, forbidAware, dictionary, list2, list3);
+                    AddNode(map, pair.a, forbidAware, anchorIndices, anchors, islands);
+                    AddNode(map, pair.b, forbidAware, anchorIndices, anchors, islands);
                 }
             }
 
-            int count = list2.Count;
+            int count = anchors.Count;
             if (count == 0)
             {
                 return false;
@@ -739,7 +742,7 @@ namespace AsAboveSoBelow
                         stringBuilder2.Append(", ");
                     }
 
-                    stringBuilder2.Append(list2[j].Position).Append("=isl ").Append(list3[j]);
+                    stringBuilder2.Append(anchors[j].Position).Append("=isl ").Append(islands[j]);
                 }
 
                 lastAnchorCompsText = "{" + stringBuilder2?.ToString() + "}";
@@ -750,82 +753,84 @@ namespace AsAboveSoBelow
                 lastAnchorCompsText = null;
             }
 
-            float[] array = new float[count];
-            bool[] array2 = new bool[count];
-            float[] array3 = new float[count];
-            bool[] array4 = new bool[count];
+            // Estimate both end legs first. Exact mode verifies the winner's legs
+            // with the pawn's real pathfinder, then reranks if the estimates change.
+            float[] seedDistance = new float[count];
+            bool[] seedVerified = new bool[count];
+            float[] walkInDistance = new float[count];
+            bool[] walkInVerified = new bool[count];
             for (int k = 0; k < count; k++)
             {
-                array[k] = (destComps.Contains(list3[k]) ? (list2[k].Position - to).LengthHorizontal : float.MaxValue);
-                array3[k] = ((list3[k] == compFrom) ? (list2[k].Position - from).LengthHorizontal : float.MaxValue);
+                seedDistance[k] = (destComps.Contains(islands[k]) ? (anchors[k].Position - to).LengthHorizontal : float.MaxValue);
+                walkInDistance[k] = ((islands[k] == compFrom) ? (anchors[k].Position - from).LengthHorizontal : float.MaxValue);
             }
 
-            float[] array5 = new float[count];
-            bool[] array6 = new bool[count];
-            int[] array7 = new int[count];
-            int num = 0;
+            float[] distance = new float[count];
+            bool[] settled = new bool[count];
+            int[] nextTowardSeed = new int[count];
+            int correctionRound = 0;
             while (true)
             {
                 for (int l = 0; l < count; l++)
                 {
-                    array5[l] = array[l];
-                    array6[l] = false;
-                    array7[l] = -1;
+                    distance[l] = seedDistance[l];
+                    settled[l] = false;
+                    nextTowardSeed[l] = -1;
                 }
 
                 for (int m = 0; m < count; m++)
                 {
-                    int num2 = -1;
-                    float num3 = float.MaxValue;
+                    int settledAnchor = -1;
+                    float bestDistance = float.MaxValue;
                     for (int n = 0; n < count; n++)
                     {
-                        if (!array6[n] && array5[n] < num3)
+                        if (!settled[n] && distance[n] < bestDistance)
                         {
-                            num3 = array5[n];
-                            num2 = n;
+                            bestDistance = distance[n];
+                            settledAnchor = n;
                         }
                     }
 
-                    if (num2 < 0)
+                    if (settledAnchor < 0)
                     {
                         break;
                     }
 
-                    array6[num2] = true;
-                    for (int num4 = 0; num4 < count; num4++)
+                    settled[settledAnchor] = true;
+                    for (int walkNeighbor = 0; walkNeighbor < count; walkNeighbor++)
                     {
-                        if (!array6[num4] && list3[num4] == list3[num2])
+                        if (!settled[walkNeighbor] && islands[walkNeighbor] == islands[settledAnchor])
                         {
-                            float num5 = (exact ? WalkEdge(map, list2[num2], list2[num4], forbidAware) : (list2[num4].Position - list2[num2].Position).LengthHorizontal);
-                            float num6 = array5[num2] + num5;
-                            if (num6 < array5[num4])
+                            float walkCost = (exact ? WalkEdge(map, anchors[settledAnchor], anchors[walkNeighbor], forbidAware) : (anchors[walkNeighbor].Position - anchors[settledAnchor].Position).LengthHorizontal);
+                            float walkDistance = distance[settledAnchor] + walkCost;
+                            if (walkDistance < distance[walkNeighbor])
                             {
-                                array5[num4] = num6;
-                                array7[num4] = num2;
+                                distance[walkNeighbor] = walkDistance;
+                                nextTowardSeed[walkNeighbor] = settledAnchor;
                             }
                         }
                     }
 
-                    for (int num7 = 0; num7 < list.Count; num7++)
+                    for (int pairIndex = 0; pairIndex < list.Count; pairIndex++)
                     {
-                        Pair pair2 = list[num7];
-                        Building_Door building_Door;
-                        if (pair2.a == list2[num2])
+                        Pair pair2 = list[pairIndex];
+                        Building_Door crossingNeighbor;
+                        if (pair2.a == anchors[settledAnchor])
                         {
-                            building_Door = pair2.b;
+                            crossingNeighbor = pair2.b;
                         }
                         else
                         {
-                            building_Door = ((pair2.b == list2[num2]) ? pair2.a : null);
+                            crossingNeighbor = ((pair2.b == anchors[settledAnchor]) ? pair2.a : null);
                         }
 
-                        if (building_Door != null && dictionary.TryGetValue(building_Door, out var value) && value >= 0 && !array6[value])
+                        if (crossingNeighbor != null && anchorIndices.TryGetValue(crossingNeighbor, out var value) && value >= 0 && !settled[value])
                         {
-                            float num8 = array5[num2] + 7f;
-                            if (num8 < array5[value])
+                            float crossingDistance = distance[settledAnchor] + 7f;
+                            if (crossingDistance < distance[value])
                             {
-                                array5[value] = num8;
-                                array7[value] = num2;
+                                distance[value] = crossingDistance;
+                                nextTowardSeed[value] = settledAnchor;
                             }
                         }
                     }
@@ -834,13 +839,13 @@ namespace AsAboveSoBelow
                 float bestTotal = float.MaxValue;
                 int bestNi = -1;
                 int bestFi = -1;
-                for (int num9 = 0; num9 < list.Count; num9++)
+                for (int candidatePairIndex = 0; candidatePairIndex < list.Count; candidatePairIndex++)
                 {
-                    Pair pair3 = list[num9];
+                    Pair pair3 = list[candidatePairIndex];
                     if (pair3.a != null && pair3.b != null && pair3.a.Spawned && pair3.b.Spawned)
                     {
-                        RankHop(dictionary, list3, compFrom, array3, array5, pair3.a, pair3.b, ref bestTotal, ref bestNi, ref bestFi);
-                        RankHop(dictionary, list3, compFrom, array3, array5, pair3.b, pair3.a, ref bestTotal, ref bestNi, ref bestFi);
+                        RankHop(anchorIndices, islands, compFrom, walkInDistance, distance, pair3.a, pair3.b, ref bestTotal, ref bestNi, ref bestFi);
+                        RankHop(anchorIndices, islands, compFrom, walkInDistance, distance, pair3.b, pair3.a, ref bestTotal, ref bestNi, ref bestFi);
                     }
                 }
 
@@ -849,91 +854,93 @@ namespace AsAboveSoBelow
                     return false;
                 }
 
-                near = list2[bestNi];
-                far = list2[bestFi];
+                near = anchors[bestNi];
+                far = anchors[bestFi];
                 lastPlanTotal = bestTotal;
-                int num10 = bestFi;
-                for (int num11 = 0; num11 < count; num11++)
+                // Follow the winning chain to the destination-side seed to expose
+                // both the approach anchor and the distance before its last leg.
+                int seedIndex = bestFi;
+                for (int hop = 0; hop < count; hop++)
                 {
-                    if (array7[num10] < 0)
+                    if (nextTowardSeed[seedIndex] < 0)
                     {
                         break;
                     }
 
-                    num10 = array7[num10];
+                    seedIndex = nextTowardSeed[seedIndex];
                 }
 
-                lastPlanSeedAnchor = list2[num10];
-                lastPlanSeedLeg = array[num10];
+                lastPlanSeedAnchor = anchors[seedIndex];
+                lastPlanSeedLeg = seedDistance[seedIndex];
                 if (!exact)
                 {
                     return true;
                 }
 
-                bool flag = true;
-                if (!array4[bestNi])
+                bool winnerVerified = true;
+                if (!walkInVerified[bestNi])
                 {
-                    array4[bestNi] = true;
-                    float num12 = RealPathLen(map, pawn, from, new LocalTargetInfo(list2[bestNi]));
-                    if (num12 < 0f)
+                    walkInVerified[bestNi] = true;
+                    float actualWalkIn = RealPathLen(map, pawn, from, new LocalTargetInfo(anchors[bestNi]));
+                    if (actualWalkIn < 0f)
                     {
                         if (ABV2Debug.LogTransit)
                         {
-                            ABV2Debug.Transit("PLAN: walk-in to " + list2[bestNi].ThingID + " " + list2[bestNi].Position.ToString() + " NOT FOUND for " + pawn?.LabelShort + "; candidate excluded");
+                            ABV2Debug.Transit("PLAN: walk-in to " + anchors[bestNi].ThingID + " " + anchors[bestNi].Position.ToString() + " NOT FOUND for " + pawn?.LabelShort + "; candidate excluded");
                         }
 
-                        array3[bestNi] = float.MaxValue;
-                        flag = false;
+                        walkInDistance[bestNi] = float.MaxValue;
+                        winnerVerified = false;
                     }
-                    else if (Math.Abs(num12 - array3[bestNi]) > 0.5f)
+                    else if (Math.Abs(actualWalkIn - walkInDistance[bestNi]) > 0.5f)
                     {
                         if (ABV2Debug.LogTransit)
                         {
-                            ABV2Debug.Transit("PLAN: walk-in to " + list2[bestNi].ThingID + " " + list2[bestNi].Position.ToString() + " corrected " + array3[bestNi].ToString("0.0") + " -> " + num12.ToString("0.0"));
+                            ABV2Debug.Transit("PLAN: walk-in to " + anchors[bestNi].ThingID + " " + anchors[bestNi].Position.ToString() + " corrected " + walkInDistance[bestNi].ToString("0.0") + " -> " + actualWalkIn.ToString("0.0"));
                         }
 
-                        array3[bestNi] = num12;
-                        flag = false;
+                        walkInDistance[bestNi] = actualWalkIn;
+                        winnerVerified = false;
                     }
                 }
 
-                if (destComps.Contains(list3[bestFi]) && !array2[bestFi])
+                if (destComps.Contains(islands[bestFi]) && !seedVerified[bestFi])
                 {
-                    array2[bestFi] = true;
-                    float num13 = RealPathLen(map, pawn, list2[bestFi].Position, ProbeTarget(map, to, destTarget));
-                    if (num13 < 0f)
+                    seedVerified[bestFi] = true;
+                    float actualSeedDistance = RealPathLen(map, pawn, anchors[bestFi].Position, ProbeTarget(map, to, destTarget));
+                    if (actualSeedDistance < 0f)
                     {
                         if (ABV2Debug.LogTransit)
                         {
-                            ABV2Debug.Transit("PLAN: seed leg from " + list2[bestFi].ThingID + " " + list2[bestFi].Position.ToString() + " NOT FOUND for " + pawn?.LabelShort + "; candidate excluded");
+                            ABV2Debug.Transit("PLAN: seed leg from " + anchors[bestFi].ThingID + " " + anchors[bestFi].Position.ToString() + " NOT FOUND for " + pawn?.LabelShort + "; candidate excluded");
                         }
 
-                        array[bestFi] = float.MaxValue;
-                        flag = false;
+                        seedDistance[bestFi] = float.MaxValue;
+                        winnerVerified = false;
                     }
-                    else if (Math.Abs(num13 - array[bestFi]) > 0.5f)
+                    else if (Math.Abs(actualSeedDistance - seedDistance[bestFi]) > 0.5f)
                     {
                         if (ABV2Debug.LogTransit)
                         {
-                            ABV2Debug.Transit("PLAN: seed leg from " + list2[bestFi].ThingID + " " + list2[bestFi].Position.ToString() + " corrected " + array[bestFi].ToString("0.0") + " -> " + num13.ToString("0.0"));
+                            ABV2Debug.Transit("PLAN: seed leg from " + anchors[bestFi].ThingID + " " + anchors[bestFi].Position.ToString() + " corrected " + seedDistance[bestFi].ToString("0.0") + " -> " + actualSeedDistance.ToString("0.0"));
                         }
 
-                        array[bestFi] = num13;
-                        flag = false;
+                        seedDistance[bestFi] = actualSeedDistance;
+                        winnerVerified = false;
                     }
                 }
 
-                if (flag)
+                if (winnerVerified)
                 {
                     return true;
                 }
 
-                if (num >= 6)
+                if (correctionRound >= 6)
                 {
                     break;
                 }
 
-                num++;
+                correctionRound++;
             }
 
             if (ABV2Debug.LogTransit)
