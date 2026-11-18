@@ -97,214 +97,119 @@ namespace AsAboveSoBelow
             {
                 return;
             }
+
             Map map = section.map;
-            ABBandMap bands = ABBands.CompOf(map);
-            if (bands == null || !bands.Banded)
+            ABBandMap aBBandMap = ABBands.CompOf(map);
+            if (aBBandMap == null || !aBBandMap.Banded)
             {
                 return;
             }
+
             try
             {
-                int slot = bands.Slot;
-                TerrainDef air = ABDefOf.AB_OpenAir;
+                int slot = aBBandMap.Slot;
+                TerrainDef aB_OpenAir = ABDefOf.AB_OpenAir;
                 TerrainGrid terrainGrid = map.terrainGrid;
-                FogGrid fog = map.fogGrid;
+                FogGrid fogGrid = map.fogGrid;
                 ThingGrid thingGrid = map.thingGrid;
-                float maskAlt = AltitudeLayer.Terrain.AltitudeFor();
-                float terrainAlt = AltitudeLayer.TerrainScatter.AltitudeFor();
-                // Vanilla's own fog altitude: above every below print, so the fog skirt
-                // can never lose a depth-test tie against a depth-writing cutout wall
-                // sprite printed underneath it. Ordering vs terrain is queue-decided.
-                float fogAlt = AltitudeLayer.FogOfWar.AltitudeFor();
-                bool printed = false;
+                float y = AltitudeLayer.Terrain.AltitudeFor();
+                float altitude = AltitudeLayer.TerrainScatter.AltitudeFor();
+                float y2 = AltitudeLayer.FogOfWar.AltitudeFor();
+                bool flag = ABV2Debug.DrawBelowAirMask && !ABSpaceBackdrop.HasWorldBackdrop(map);
+                bool flag2 = false;
                 printedThisPass.Clear();
-
-                foreach (IntVec3 c in section.CellRect)
+                foreignDrops.Clear();
+                foreach (IntVec3 item in section.CellRect)
                 {
-                    if (!c.InBounds(map))
+                    if (!item.InBounds(map) || aBBandMap.BandOf(item) <= 0 || aBBandMap.InGutter(item) || !ABBands.ShowsBelow(terrainGrid.TerrainAt(item)))
                     {
                         continue;
                     }
-                    // Only bands that HAVE something beneath them, and never the gutter.
-                    if (bands.BandOf(c) <= 0 || bands.InGutter(c))
-                    {
-                        continue;
-                    }
-                    if (!ABBands.ShowsBelow(terrainGrid.TerrainAt(c)))
-                    {
-                        continue; // opaque by construction
-                    }
 
-                    // Descend to whatever is actually visible - see
-                    // ABBands.TryResolveVisibleBelow for why this is not a single step, and
-                    // why every downward-looking system shares that one definition.
-                    bool inBounds = ABBands.TryResolveVisibleBelow(map, bands, c,
-                        out IntVec3 below, out int drop);
-                    bool foggedBelow = inBounds && fog.IsFogged(below);
-
-                    if (!inBounds || foggedBelow)
+                    bool flag3 = ABBands.TryResolveVisibleBelow(map, aBBandMap, item, out var below, out var drop);
+                    bool flag4 = flag3 && fogGrid.IsFogged(below);
+                    if (!flag3 | flag4)
                     {
-                        // Nothing legible beneath. An open-air cell must NEVER be left with
-                        // zero geometry: AB_OpenAir is dontRender, so vanilla's terrain
-                        // layer emits only a ShadowMask, and with nothing on top the cell
-                        // renders as shader garbage.
-                        //
-                        // For UNEXPLORED ground, vanilla's own fog-of-war material goes over
-                        // the backdrop, so a mountain the colony has not dug into reads as
-                        // solid fog from above exactly as it does from the surface. The fan
-                        // (not a hard quad) matters for the fully-fogged cell too: vanilla's
-                        // border softness lives in the EXPLORED neighbours' partial fans,
-                        // and this cell must use the identical vertex layout so the two
-                        // meshes seam invisibly.
-                        if (ABV2Debug.DrawBelowAirMask)
+                        if (!ABV2Debug.DrawBelowAirMask)
                         {
-                            AddQuad(GetSubMesh(AirMaskMat), c, maskAlt, OpaqueWhite);
-                            if (foggedBelow)
-                            {
-                                EmitBelowFogFan(map, bands, fog, below, c, fogAlt);
-                                // ROCK AT EVERY LEVEL.
-                                //
-                                // An undug mountain is FOGGED, so its own sprite is never
-                                // printed by the thing loop. At +1 that does not show,
-                                // because SectionLayer_ABMountainCap draws the mass into its
-                                // own band from exactly one Slot down, fog or no fog. From
-                                // +2 and up the cap is deriving from the sky band beneath it
-                                // instead, nothing else draws mass, and all that survives is
-                                // this fog fan - the grey strip in the report.
-                                //
-                                // `drop > slot` keeps this strictly to the levels the cap
-                                // cannot reach, so the +1 view stays byte-identical.
-                                // EmitMassRepresentationAt returns false for anything that is
-                                // not mass, leaving open ground as plain fog fan.
-                                if (slot > 0 && drop > slot)
-                                {
-                                    SectionLayer_ABMountainCap.EmitMassRepresentationAt(
-                                        this, map, below, drop, terrainAlt);
-                                }
-                            }
-                            printed = true;
+                            continue;
                         }
+
+                        if (flag)
+                        {
+                            AddQuad(GetSubMesh(AirMaskMat), item, y, OpaqueWhite);
+                        }
+
+                        if (flag4)
+                        {
+                            EmitBelowFogFan(map, aBBandMap, fogGrid, below, item, y2);
+                            if (slot > 0 && drop > slot)
+                            {
+                                SectionLayer_ABMountainCap.EmitMassRepresentationAt(this, map, below, drop, altitude);
+                            }
+                        }
+
+                        flag2 = true;
                         continue;
                     }
 
                     if (ABV2Debug.DrawBelowTerrain)
                     {
-                        // THE DEPTH STACK. A mass cell is opaque to the shared descent rule,
-                        // so a column used to resolve exactly ONE level and stop - which is
-                        // why a mountain read as each tier lying on top of the next rather
-                        // than one mass continuing down. Here the descent keeps going THROUGH
-                        // mass and stops at the first solid floor, and the levels are drawn
-                        // DEEPEST FIRST so each one shows through the eroded margins of the
-                        // one above it.
-                        int levels = BuildDepthStack(map, bands, terrainGrid, fog, below);
-                        bool drew = false;
-                        bool opaqueBelow = false;
-                        for (int d = levels - 1; d >= 0; d--)
+                        foreignDrops.Add(drop);
+                        int num = BuildDepthStack(map, aBBandMap, terrainGrid, fogGrid, below);
+                        bool flag5 = false;
+                        bool flag6 = false;
+                        for (int num2 = num - 1; num2 >= 0; num2--)
                         {
-                            // ⚠ EROSION IS PERMITTED ONLY ONCE SOMETHING OPAQUE HAS ACTUALLY
-                            // BEEN LAID UNDER US - MEASURED, NOT ASSUMED.
-                            //
-                            // The first version said "the bottom entry never erodes, therefore
-                            // the bottom is opaque", which is an assumption about the bottom
-                            // rather than a fact about the mesh. PrintBelowTerrain returns
-                            // early and draws NOTHING when the cell's terrain is dontRender or
-                            // its material is missing, and then every level above it eroded
-                            // onto a hole - the staircase of missing floor along a mass edge.
-                            // Carrying the answer up the stack makes it impossible to erode
-                            // onto nothing regardless of which entries decline.
-                            drew |= PrintBelowTerrain(map, terrainGrid, depthCell[d], c,
-                                terrainAlt, slot, d, levels, opaqueBelow, out bool laidOpaque);
-                            opaqueBelow |= laidOpaque;
+                            flag5 |= PrintBelowTerrain(map, terrainGrid, depthCell[num2], item, altitude, slot, num2, num, flag6, out var laidOpaque);
+                            flag6 |= laidOpaque;
                         }
-                        if (!drew && ABV2Debug.DrawBelowAirMask)
+
+                        if (!flag5 & flag)
                         {
-                            // Below terrain is itself dontRender: still needs a backdrop.
-                            AddQuad(GetSubMesh(AirMaskMat), c, maskAlt, OpaqueWhite);
+                            AddQuad(GetSubMesh(AirMaskMat), item, y, OpaqueWhite);
                         }
                     }
-                    printed = true;
 
-                    // Explored ground bordering unexplored: vanilla's fog boundary reaches
-                    // INTO the first explored cell with a corner-smoothed skirt (the
-                    // "vanilla style border" around every unmined rock mass). The old
-                    // hard per-cell quads stopped dead at the fogged cell's edge, which
-                    // is exactly the "black square textures around minable rock" report.
+                    flag2 = true;
                     if (ABV2Debug.DrawBelowAirMask)
                     {
-                        EmitBelowFogFan(map, bands, fog, below, c, fogAlt);
+                        EmitBelowFogFan(map, aBBandMap, fogGrid, below, item, y2);
                     }
 
                     if (!ABV2Debug.DrawBelowThings)
                     {
                         continue;
                     }
-                    List<Thing> things = thingGrid.ThingsListAtFast(below);
-                    for (int i = 0; i < things.Count; i++)
+
+                    List<Thing> list = thingGrid.ThingsListAtFast(below);
+                    for (int i = 0; i < list.Count; i++)
                     {
-                        // NB: everything below is translated by `drop`, the accumulated
-                        // descent, not by one slot.
-                        Thing t = things[i];
-                        DrawerType drawer = t.def.drawerType;
-                        if (drawer != DrawerType.MapMeshOnly && drawer != DrawerType.MapMeshAndRealTime)
+                        Thing thing = list[i];
+                        DrawerType drawerType = thing.def.drawerType;
+                        if ((drawerType == DrawerType.MapMeshOnly || drawerType == DrawerType.MapMeshAndRealTime) && (thing.def.seeThroughFog || !fogGrid.IsFogged(thing.Position)) && !AdaptiveStorageCompat.HidesFromSectionLayer(thing, map) && IsPrintAnchor(thing, below, map, aBBandMap, terrainGrid, aB_OpenAir, drop) && printedThisPass.Add(thing))
                         {
-                            continue; // realtime things are not part of the map mesh
-                        }
-                        if (!t.def.seeThroughFog && fog.IsFogged(t.Position))
-                        {
-                            continue;
-                        }
-                        if (!IsPrintAnchor(t, below, map, bands, terrainGrid, air, drop))
-                        {
-                            continue;
-                        }
-                        // ONE PRINT PER THING PER PASS, unconditionally.
-                        //
-                        // IsPrintAnchor picks the first cell of a multi-cell thing whose
-                        // viewing cell can see it, which is single-valued only when every
-                        // cell of that thing resolves to the SAME drop. It does not: `drop`
-                        // comes from TryResolveVisibleBelow PER VIEWING CELL (§5), so two
-                        // columns over one 2x2 object can descend different distances, each
-                        // then computing a different "first visible cell" and each electing
-                        // itself the anchor.
-                        //
-                        // Reported against Medieval Overhaul's golem formations
-                        // (DankPyon_GolemRock_*, size 2x2, Graphic_Random, drawSize 4x4):
-                        // "drawn four times overlapping" - four cells, four anchors, four
-                        // quads at the same TrueCenter, so the alpha stacks instead of the
-                        // sprite shifting. Any 2x2+ thing is exposed, not just MO's.
-                        //
-                        // Deduping by THING rather than by fixing the anchor rule is
-                        // deliberate: the anchor rule has a real job (a thing whose origin
-                        // cell is hidden but whose far corner is visible must still draw),
-                        // and it is the drop-dependence, not the rule, that is unsound.
-                        // A set membership test is O(1), correct under every drop layout,
-                        // and cannot regress the visible-corner case.
-                        if (!printedThisPass.Add(t))
-                        {
-                            continue;
-                        }
-                        try
-                        {
-                            // The depth cue is applied HERE, at print time, because it is a
-                            // per-object transform: each thing shrinks about its own centre,
-                            // so unlike a whole-layer scale nothing slides off the cell it
-                            // stands on. Baked, therefore free per frame - at the price of a
-                            // rebake when the setting changes (ABMod.WriteSettings).
-                            float shrink = ABDepthView.CanShrink(t)
-                                ? ABDepthView.ScaleForLevels(slot > 0 ? drop / slot : 1)
-                                : 1f;
-                            SnapshotVertCounts();
-                            t.Print(this);
-                            FinishNewVerts(drop, t.TrueCenter(), shrink);
-                        }
-                        catch (Exception e)
-                        {
-                            Log.WarningOnce(ABLog.Tag + " V2 below print failed for " + t.LabelCap
-                                + ": " + e.Message, t.thingIDNumber ^ 762195870);
+                            try
+                            {
+                                float shrink = (ABDepthView.CanShrink(thing) ? ABDepthView.ScaleForLevels((slot <= 0) ? 1 : (drop / slot)) : 1f);
+                                SnapshotVertCounts();
+                                thing.Print(this);
+                                FinishNewVerts(drop, thing.TrueCenter(), shrink);
+                            }
+                            catch (Exception ex)
+                            {
+                                Log.WarningOnce("[As above, So below] V2 below print failed for " + thing.LabelCap + ": " + ex.Message, thing.thingIDNumber ^ 0x2D6E2F9E);
+                            }
                         }
                     }
                 }
-                if (printed)
+
+                if (ABBelowForeignLayers.Emit(this, map, aBBandMap, section, foreignDrops))
+                {
+                    flag2 = true;
+                }
+
+                if (flag2)
                 {
                     FinalizeMesh(MeshParts.All);
                 }
@@ -323,14 +228,6 @@ namespace AsAboveSoBelow
 
         private readonly TerrainDef[] meadowAdj = new TerrainDef[8];
 
-        /// <summary>A below cell counts as fogged-for-view when it is genuinely fogged OR
-        /// not legible at all (off-map, gutter): the veil then runs seamlessly to the
-        /// band edge instead of leaving a lit seam against the air mask.</summary>
-        private static bool FoggedForView(Map map, ABBandMap bands, FogGrid fog, IntVec3 b)
-        {
-            return !b.InBounds(map) || bands.InGutter(b) || fog.IsFogged(b);
-        }
-
         /// <summary>
         /// Vanilla SectionLayer_FogOfWar's per-cell corner smoothing, sampled one band
         /// DOWN and emitted one band UP. A fogged cell covers all nine points; an
@@ -338,32 +235,24 @@ namespace AsAboveSoBelow
         /// that edge's three points, diagonal = the corner point). Returns true when
         /// anything was emitted.
         /// </summary>
-        private bool EmitBelowFogFan(Map map, ABBandMap bands, FogGrid fog, IntVec3 below,
-            IntVec3 above, float y)
+        private bool EmitBelowFogFan(Map map, ABBandMap bands, FogGrid fog, IntVec3 below, IntVec3 above, float y)
         {
             bool[] covered = fogCovered;
-            if (FoggedForView(map, bands, fog, below))
+            bool backdrop = ABSpaceBackdrop.HasWorldBackdrop(map);
+            if (FoggedForView(map, bands, fog, below, backdrop))
             {
                 ABNineFan.CoverAll(covered);
             }
             else
             {
-                ABNineFan.Cover(covered,
-                    FoggedForView(map, bands, fog, below + IntVec3.North),
-                    FoggedForView(map, bands, fog, below + IntVec3.South),
-                    FoggedForView(map, bands, fog, below + IntVec3.East),
-                    FoggedForView(map, bands, fog, below + IntVec3.West),
-                    FoggedForView(map, bands, fog, below + IntVec3.South + IntVec3.West),
-                    FoggedForView(map, bands, fog, below + IntVec3.North + IntVec3.West),
-                    FoggedForView(map, bands, fog, below + IntVec3.North + IntVec3.East),
-                    FoggedForView(map, bands, fog, below + IntVec3.South + IntVec3.East));
+                ABNineFan.Cover(covered, FoggedForView(map, bands, fog, below + IntVec3.North, backdrop), FoggedForView(map, bands, fog, below + IntVec3.South, backdrop), FoggedForView(map, bands, fog, below + IntVec3.East, backdrop), FoggedForView(map, bands, fog, below + IntVec3.West, backdrop), FoggedForView(map, bands, fog, below + IntVec3.South + IntVec3.West, backdrop), FoggedForView(map, bands, fog, below + IntVec3.North + IntVec3.West, backdrop), FoggedForView(map, bands, fog, below + IntVec3.North + IntVec3.East, backdrop), FoggedForView(map, bands, fog, below + IntVec3.South + IntVec3.East, backdrop));
                 if (!ABNineFan.Any(covered))
                 {
                     return false;
                 }
             }
-            ABNineFan.AddFan(GetSubMesh(MatBases.FogOfWar), above.x, above.z, y, covered,
-                OpaqueWhite, BelowTintClear);
+
+            ABNineFan.AddFan(GetSubMesh(MatBases.FogOfWar), above.x, above.z, y, covered, OpaqueWhite, BelowTintClear);
             return true;
         }
 
@@ -410,201 +299,88 @@ namespace AsAboveSoBelow
         ///    and fades is settled by material render QUEUE (renderPrecedence), not by
         ///    altitude.
         /// </summary>
-        private bool PrintBelowTerrain(Map map, TerrainGrid terrainGrid, IntVec3 below,
-            IntVec3 above, float altitude, int slot, int depth, int levels, bool mayErode,
-            out bool laidOpaque)
+        private bool PrintBelowTerrain(Map map, TerrainGrid terrainGrid, IntVec3 below, IntVec3 above, float altitude, int slot, int depth, int levels, bool mayErode, out bool laidOpaque)
         {
             laidOpaque = false;
-            TerrainDef def = terrainGrid.TerrainAt(below);
-            if (def == null || def.dontRender)
+            TerrainDef terrainDef = terrainGrid.TerrainAt(below);
+            if (terrainDef == null || (terrainDef.dontRender && !terrainDef.isFoundation))
             {
                 return false;
             }
-            CellTerrain self = CellTerrainAt(map, terrainGrid, below);
-            // A mountain mass on a level below reads as FLAT FLOOR from up here, because
-            // AB_MountainTop is a deliberately plain dark terrain and the rock texture that
-            // normally covers it comes from SectionLayer_ABMountainCap's rough-stone field -
-            // which lives in that band's OWN section mesh and so is invisible from another
-            // level. Substituting the host rock's rough terrain gives the mass its stone
-            // back when seen from above.
-            //
-            // PARTIAL by construction: the cap layer's silhouette lips, corner fillers and
-            // cliff-face shading are still not reproduced across bands, so a mountain viewed
-            // from two levels up reads as rock but without its rim detail. Fixing that
-            // properly means parameterising the cap layer's per-cell emitters by a z offset
-            // and calling them from here.
-            if (def == ABDefOf.AB_MountainTop)
+
+            CellTerrain cellTerrain = CellTerrainAt(map, terrainGrid, below);
+            if (terrainDef == ABDefOf.AB_MountainTop)
             {
-                TerrainDef host = HostRockTerrain(map, below, slot);
-                if (host != null)
+                TerrainDef terrainDef2 = HostRockTerrain(map, below, slot);
+                if (terrainDef2 != null)
                 {
-                    self.def = host;
+                    cellTerrain.def = terrainDef2;
                 }
             }
-            Material baseMat = DepthQueue(MaterialFor(map, self), depth, levels);
-            LayerSubMesh sub = baseMat != null ? GetSubMesh(baseMat) : null;
-            if (sub == null)
+
+            Material material = DepthQueue(MaterialFor(map, cellTerrain), depth, levels);
+            LayerSubMesh layerSubMesh = ((material != null) ? GetSubMesh(material) : null);
+            if (layerSubMesh == null)
             {
                 return false;
             }
-            // ⚠ THE BASE QUAD IS THE THIRD FULL-CELL FILL UNDER A STYLISED OUTLINE.
-            //
-            // Two others were found first (the cap's own in-band field and the cross-level
-            // emitter's), but a sky-band mass viewed from above gets its rock from HERE - the
-            // AB_MountainTop -> host rough stone substitution a few lines up - and this quad
-            // is opaque corner to corner. The atlas tile emitted below it is transparent
-            // outside the rock outline, so the quad fills those gaps back in and the cell
-            // squares off past the black border, once per level down the mountain.
-            //
-            // Eroded to the CAP's link rule, the same one EmitMassSilhouetteAt uses for the
-            // tile that lands on top, so fill and outline agree by construction. Non-mass
-            // terrain keeps the plain quad: it has no outline to hide under, and vanilla's
-            // own edge fades (below) are what soften it.
-            int drop = above.z - below.z;
-            bool skyMass = def == ABDefOf.AB_MountainTop;
-            bool beyondCapReach = slot > 0
-                && drop > slot
-                && ABMinedRockLookup.TryGetMinedRockDef(def, out _);
-            bool massCell = skyMass || beyondCapReach;
-            // ⚠ `massCell` alone is the DECORATION gate and is NOT the right question here.
-            // It carries `drop > slot`, which exists so the cap and the cross-level emitter
-            // do not both decorate at one level down - irrelevant to whether this FILL should
-            // retract. TryMassFillCoverage asks the fill's own question (does anything draw an
-            // outline over this cell, and under whose link rule) and answers false when
-            // nothing does, which is what keeps ordinary floors on their full quad.
-            //
-            // ⚠ AND AN ERODED FILL MUST HAVE SOMETHING BEHIND IT, OR IT IS A HOLE.
-            //
-            // This layer's fill IS the backdrop: the viewing cell is see-through terrain,
-            // which is `dontRender`, so vanilla's terrain layer emits only a ShadowMask there
-            // and nothing else paints the cell. Eroding the fill exposed that, and an
-            // uncovered ShadowMask renders as shader garbage - a red rim tracing the mass
-            // outline. The same failure `AirMaskMat` exists to prevent, reintroduced from a
-            // new direction.
-            //
-            // The fix is the one the report proposed: put the ADJACENT GROUND under the rock
-            // instead of leaving a gap. That is also what vanilla shows - a rock's
-            // transparent corners reveal the ground it stands in, never the void - so the
-            // backdrop is not a patch over a hole, it is the correct picture.
-            //
-            // No non-mass neighbour means an INTERIOR cell, where CoverInterior returns full
-            // coverage and the fan is geometrically the quad anyway - so declining to erode
-            // there costs exactly nothing and guarantees a hole can never be emitted.
-            //
-            // ⚠ THE BOTTOM OF THE STACK NEVER ERODES (`mayErode` is false for it). It is the
-            // solid floor everything above is seen against, so it must stay opaque - that is
-            // what makes a hole unrepresentable rather than merely unlikely, and it is why the
-            // lateral backdrop below is now only a FALLBACK for a single-level column.
-            //
-            // With a stack, the correct thing under an eroded mass cell is the level
-            // BENEATH it, not a neighbour beside it. Borrowing sideways is what made every
-            // tier read as a separate slab laid on the next: the rock was being drawn against
-            // its own level's ground instead of against the mountain continuing downward.
-            bool eroded = false;
-            if (mayErode
-                && SectionLayer_ABMountainCap.MassFieldFadeEnabled
-                && SectionLayer_ABMountainCap.TryMassFillCoverage(map, below, massCell, fanCovered))
+
+            int num = above.z - below.z;
+            bool flag = terrainDef == ABDefOf.AB_MountainTop;
+            bool flag2 = slot > 0 && num > slot && ABMinedRockLookup.TryGetMinedRockDef(terrainDef, out var _);
+            bool flag3 = flag | flag2;
+            bool flag4 = false;
+            if (mayErode && SectionLayer_ABMountainCap.MassFieldFadeEnabled && SectionLayer_ABMountainCap.TryMassFillCoverage(map, below, flag3, fanCovered))
             {
+                CellTerrain backdrop;
                 if (levels > 1)
                 {
-                    // The next level down is already drawn underneath: erode straight onto it.
-                    eroded = true;
+                    flag4 = true;
                 }
-                else if (TryBackdropTerrain(map, terrainGrid, below, out CellTerrain backdrop))
+                else if (TryBackdropTerrain(map, terrainGrid, below, out backdrop))
                 {
-                    Material backMat = MaterialFor(map, backdrop);
-                    LayerSubMesh backSub = backMat != null ? GetSubMesh(backMat) : null;
-                    if (backSub != null)
+                    Material material2 = MaterialFor(map, backdrop);
+                    LayerSubMesh layerSubMesh2 = ((material2 != null) ? GetSubMesh(material2) : null);
+                    if (layerSubMesh2 != null)
                     {
-                        AddQuad(backSub, above, altitude, BelowTint);
-                        eroded = true;
-                        laidOpaque = true; // the borrowed ground covers the cell
+                        AddQuad(layerSubMesh2, above, altitude, BelowTint);
+                        flag4 = true;
+                        laidOpaque = true;
                     }
                 }
             }
-            if (eroded)
+
+            if (flag4)
             {
-                ABNineFan.AddFan(sub, above.x, above.z, altitude, fanCovered,
-                    BelowTint, BelowTintClear);
+                ABNineFan.AddFan(layerSubMesh, above.x, above.z, altitude, fanCovered, BelowTint, BelowTintClear);
             }
             else
             {
-                int count = sub.verts.Count;
-                sub.verts.Add(new Vector3(above.x, altitude, above.z));
-                sub.verts.Add(new Vector3(above.x, altitude, above.z + 1));
-                sub.verts.Add(new Vector3(above.x + 1, altitude, above.z + 1));
-                sub.verts.Add(new Vector3(above.x + 1, altitude, above.z));
+                int count = layerSubMesh.verts.Count;
+                layerSubMesh.verts.Add(new Vector3(above.x, altitude, above.z));
+                layerSubMesh.verts.Add(new Vector3(above.x, altitude, above.z + 1));
+                layerSubMesh.verts.Add(new Vector3(above.x + 1, altitude, above.z + 1));
+                layerSubMesh.verts.Add(new Vector3(above.x + 1, altitude, above.z));
                 for (int i = 0; i < 4; i++)
                 {
-                    sub.colors.Add(BelowTint);
+                    layerSubMesh.colors.Add(BelowTint);
                 }
-                sub.tris.Add(count);
-                sub.tris.Add(count + 1);
-                sub.tris.Add(count + 2);
-                sub.tris.Add(count);
-                sub.tris.Add(count + 2);
-                sub.tris.Add(count + 3);
-                laidOpaque = true; // a full-cell quad: everything above may erode onto it
+
+                layerSubMesh.tris.Add(count);
+                layerSubMesh.tris.Add(count + 1);
+                layerSubMesh.tris.Add(count + 2);
+                layerSubMesh.tris.Add(count);
+                layerSubMesh.tris.Add(count + 2);
+                layerSubMesh.tris.Add(count + 3);
+                laidOpaque = true;
             }
 
-            PrintBelowTerrainEdges(map, terrainGrid, below, above, self, depth, levels);
-            // Give a mountain mass its EDGE back. The substituted rough terrain above only
-            // restores its stone; the lip, outline and corner fillers that make it read as a
-            // mountain are emitted by the cap layer into its own band's mesh, so they have to
-            // be re-emitted here at our offset. Slightly above the terrain quad so the tile
-            // sits over it rather than fighting for the same depth.
-            //
-            // ⚠ AND THE GATE HAS TO ALLOW FOR THE CAP'S ONE-SLOT REACH.
-            //
-            // SectionLayer_ABMountainCap derives its whole cap from `-bands.Slot`, exactly
-            // ONE band down (its `groundOffset`). That is right for a sky band's own mass -
-            // each level's mass is projected from the level beneath it, which is what makes
-            // mountains taper as they rise - but it means the cap can only ever represent
-            // rock ONE level below the viewer.
-            //
-            // Testing `def == AB_MountainTop` alone inherited that limit, because
-            // AB_MountainTop is the terrain WE give sky-band mass; ordinary ground rock
-            // carries its own rough-stone terrain and never matched. So nothing at all drew
-            // ground rock from two levels up:
-            //
-            //   +1  cap reaches the ground        -> rock drawn (as cap field + silhouette,
-            //                                        which is why it reads as a COLOUR SHIFT
-            //                                        rather than the real sprite)
-            //   +2  cap now derives from +1       -> ground rock simply absent
-            //   +3  same shift one level up       -> +1's rock absent
-            //
-            // Reported exactly that way, and it is the same family as the `- Slot` bug in
-            // §5: a single-step assumption standing in for the descent rule. It survived the
-            // standing `grep '- Slot'` audit because it is written as a TERRAIN-DEF GATE
-            // rather than as arithmetic - the ninth instance, and the first with no `- Slot`
-            // in it to find.
-            //
-            // `drop > slot` is load-bearing: at exactly one slot the cap already draws this
-            // mass, and firing here as well would double the lip and corner fillers on every
-            // mountain edge at +1. The lookup keeps it to rock-derived terrain, and
-            // EmitMassSilhouetteAt self-guards anyway (it returns false when the cell has a
-            // mineable edifice whose own sprite draws the edge).
-            // ⚠ AND THE SILHOUETTE ALONE IS NOT ENOUGH - USE ITS RETURN VALUE.
-            //
-            // EmitMassSilhouetteAt covers the vanilla LINKED case (lip plus corner fillers)
-            // and RETURNS FALSE when it declines: a mineable edifice, or a variant-mode
-            // graphic - which is every rock once Better Mountains is installed. Nothing
-            // then drew the mass at all, so a sky ledge one level down rendered as bare
-            // substituted stone with no rock on it. Reported as "+2 does not show the rock
-            // ledge of +1", and BM-only for exactly that reason.
-            //
-            // Handing off on its own return value is what keeps this from double-drawing:
-            // the representation runs ONLY where the silhouette refused, so vanilla linked
-            // rock keeps its lip and corner fillers untouched and BM rock gets its sprite.
-            if (massCell)
+            PrintBelowTerrainEdges(map, terrainGrid, below, above, cellTerrain, depth, levels);
+            if (flag3 && !SectionLayer_ABMountainCap.EmitMassSilhouetteAt(this, map, below, num, altitude + 0.02f, fanCovered, meadowAdj))
             {
-                if (!SectionLayer_ABMountainCap.EmitMassSilhouetteAt(this, map, below,
-                        drop, altitude + 0.02f, fanCovered, meadowAdj))
-                {
-                    SectionLayer_ABMountainCap.EmitMassRepresentationAt(this, map, below,
-                        drop, altitude);
-                }
+                SectionLayer_ABMountainCap.EmitMassRepresentationAt(this, map, below, num, altitude);
             }
+
             return true;
         }
 
@@ -998,6 +774,18 @@ namespace AsAboveSoBelow
                 }
             }
         }
+        private static bool FoggedForView(Map map, ABBandMap bands, FogGrid fog, IntVec3 b, bool backdrop)
+        {
+            if (!b.InBounds(map) || bands.InGutter(b))
+            {
+                return !backdrop;
+            }
+
+            return fog.IsFogged(b);
+        }
+
+        private readonly HashSet<int> foreignDrops = new HashSet<int>();
+
     }
 
     /// <summary>

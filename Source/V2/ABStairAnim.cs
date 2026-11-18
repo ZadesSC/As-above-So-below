@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Threading;
 using HarmonyLib;
@@ -655,42 +656,34 @@ namespace AsAboveSoBelow
         /// </summary>
         private static ClipPose EntryPose(Clip c, float p, int ageTicks)
         {
-            ClipPose o = default;
-            o.facing = FaceOf(c.dirX, c.dirZ);
-
-            float ease = Smooth(p);
-            bool ladder = c.kind == ClipKind.Ladder;
-            bool elevator = c.kind == ClipKind.Elevator;
-
-            // Ladders get a slower, taller rung cadence; an elevator has no footfall at all.
-            float period = ladder ? 16f : 12f;
-            float amp = ladder ? 0.08f : 0.05f;
-            float bob = elevator ? 0f
-                : Mathf.Abs(Mathf.Sin(ageTicks * Mathf.PI / period)) * amp;
-
-            // §85.15: RECEDE EITHER WAY. The direction changes only where the pawn goes,
-            // not whether it is leaving.
-            float vert = (c.up ? ClimbRise : ClimbSink) * ease;
-            float k = 1f - ClimbRecede * ease;
-
-            o.offX = c.travelX * ease;
-            o.offZ = c.travelZ * ease + bob + vert;
-            o.sx = o.sz = k;
-
-            // Alternating sway, one cycle per two steps. Stairs only: a ladder is climbed
-            // square-on, and a swaying elevator passenger reads as drunk.
-            o.rot = (ladder || elevator) ? 0f
-                : Mathf.Sin(ageTicks * Mathf.PI / 24f) * 3f;
-
-            if (elevator)
+            ClipPose result = new ClipPose
             {
-                // The car takes the load and the cable judders. Realtime, not progress, so
-                // it does not visibly step at low game speeds.
-                o.offX += Mathf.Sin(Time.realtimeSinceStartup * 41f) * 0.02f;
-                // Riding the car means facing out of it, not along the shaft.
-                o.facing = Opposite(o.facing);
+                facing = FaceOf(c.dirX, c.dirZ)
+            };
+            float num = Smooth(p);
+            bool flag = c.kind == ClipKind.Ladder;
+            if (flag)
+            {
+                result.facing = 0;
             }
-            return o;
+
+            bool flag2 = c.kind == ClipKind.Elevator;
+            float num2 = (flag ? 16f : 12f);
+            float num3 = (flag ? 0.08f : 0.05f);
+            float num4 = (flag2 ? 0f : (Mathf.Abs(Mathf.Sin((float)ageTicks * Mathf.PI / num2)) * num3));
+            float num5 = (c.up ? 0.3f : (-0.35f)) * num;
+            float sz = 1f - 0.28f * num;
+            result.offX = c.travelX * num;
+            result.offZ = c.travelZ * num + num4 + num5;
+            result.sx = (result.sz = sz);
+            result.rot = ((flag | flag2) ? 0f : (Mathf.Sin((float)ageTicks * Mathf.PI / 24f) * 3f));
+            if (flag2)
+            {
+                result.offX += Mathf.Sin(Time.realtimeSinceStartup * 41f) * 0.02f;
+                result.facing = Opposite(result.facing);
+            }
+
+            return result;
         }
 
         /// <summary>
@@ -709,26 +702,24 @@ namespace AsAboveSoBelow
         /// </summary>
         private static ClipPose EmergePose(Clip c, float q)
         {
-            ClipPose o = default;
-            o.facing = FaceOf(c.dirX, c.dirZ);
+            ClipPose result = new ClipPose
+            {
+                facing = FaceOf(c.dirX, c.dirZ)
+            };
+            if (c.kind == ClipKind.Ladder)
+            {
+                result.facing = 0;
+            }
 
-            // Ease-out remainder: 1 the instant the pawn lands, 0 once settled.
-            float e = 1f - Mathf.Clamp01(q);
-            e *= e;
-
-            // §85.15: APPEAR EITHER WAY - start short of full size and grow into it. The
-            // vertical term stays inverted by direction and is now the ONLY thing that is:
-            // arriving from below starts sunken and rises, from above starts raised and
-            // settles. Getting THAT backwards is what makes a descent end by rising out of
-            // the floor.
-            float vert = c.up ? -EmergeVert : EmergeVert;
-            float k = 1f - EmergeAppear * e;
-
-            o.offX = c.ox * e;
-            o.offZ = (c.oz + vert) * e;
-            o.sx = o.sz = k;
-            o.rot = 0f;
-            return o;
+            float num = 1f - Mathf.Clamp01(q);
+            num *= num;
+            float num2 = (c.up ? (-0.3f) : 0.3f);
+            float sz = 1f - 0.18f * num;
+            result.offX = c.ox * num;
+            result.offZ = (c.oz + num2) * num;
+            result.sx = (result.sz = sz);
+            result.rot = 0f;
+            return result;
         }
     }
 

@@ -109,6 +109,8 @@ namespace AsAboveSoBelow
                 return true;
             }
         }
+        public List<string> strippedComps;
+
     }
 
     /// <summary>
@@ -206,31 +208,35 @@ namespace AsAboveSoBelow
         /// network beats a round of guessing.</summary>
         public static string Report()
         {
-            StringBuilder sb = new StringBuilder();
+            StringBuilder stringBuilder = new StringBuilder();
             List<ABNetwork> list = All;
-            sb.AppendLine(ABLog.Tag + " NETWORK SCAN: " + list.Count + " network(s), "
-                + generated + " carrier(s) generated, " + skipped + " skipped.");
+            stringBuilder.AppendLine("[As above, So below] NETWORK SCAN: " + list.Count + " network(s), " + generated + " carrier(s) generated, " + skipped + " skipped, " + stripped + " host comp(s) refused on clones.");
             for (int i = 0; i < list.Count; i++)
             {
-                ABNetwork n = list[i];
-                sb.AppendLine("  " + n.id);
-                sb.AppendLine("      type:     " + n.type + (n.forcedType != null ? " (forced)" : ""));
-                sb.AppendLine("      probe:    " + n.probe);
-                sb.AppendLine("      template: " + (n.template != null ? n.template.defName : "NONE")
-                    + "  label=\"" + n.LabelCap + "\""
-                    + "  from=" + (n.template?.modContentPack?.Name ?? "?"));
-                sb.AppendLine("      carrier:  " + (n.carrier != null ? n.carrier.defName : "NOT GENERATED"));
-                sb.AppendLine("      research: " + DescribeResearch(n) + "  done=" + n.ResearchDone);
+                ABNetwork aBNetwork = list[i];
+                stringBuilder.AppendLine("  " + aBNetwork.id);
+                stringBuilder.AppendLine("      type:     " + aBNetwork.type.ToString() + ((aBNetwork.forcedType != null) ? " (forced)" : ""));
+                stringBuilder.AppendLine("      probe:    " + aBNetwork.probe);
+                stringBuilder.AppendLine("      template: " + ((aBNetwork.template != null) ? aBNetwork.template.defName : "NONE") + "  label=\"" + aBNetwork.LabelCap + "\"  from=" + (aBNetwork.template?.modContentPack?.Name ?? "?"));
+                stringBuilder.AppendLine("      carrier:  " + ((aBNetwork.carrier != null) ? aBNetwork.carrier.defName : "NOT GENERATED"));
+                if (aBNetwork.strippedComps != null)
+                {
+                    stringBuilder.AppendLine("      stripped: " + string.Join(", ", aBNetwork.strippedComps.ToArray()) + "  (refused on the clone - see carrierCompVeto)");
+                }
+
+                stringBuilder.AppendLine("      research: " + DescribeResearch(aBNetwork) + "  done=" + aBNetwork.ResearchDone);
             }
+
             if (log.Count > 0)
             {
-                sb.AppendLine("  SCAN NOTES:");
-                for (int i = 0; i < log.Count; i++)
+                stringBuilder.AppendLine("  SCAN NOTES:");
+                for (int j = 0; j < log.Count; j++)
                 {
-                    sb.AppendLine("    " + log[i]);
+                    stringBuilder.AppendLine("    " + log[j]);
                 }
             }
-            return sb.ToString();
+
+            return stringBuilder.ToString();
         }
 
         private static string DescribeResearch(ABNetwork n)
@@ -711,101 +717,67 @@ namespace AsAboveSoBelow
                 skipped++;
                 return;
             }
+
             try
             {
-                ThingDef c = (ThingDef)Activator.CreateInstance(n.template.GetType());
-                CopyFields(n.template, c, c.GetType());
-
-                c.defName = CarrierDefName(n.id);
-                c.label = n.template.label;
-                c.description = n.template.description;
-                c.modContentPack = n.template.modContentPack;
-
-                // ⚠ THESE ARE SHARED REFERENCES UNTIL COPIED. A field-by-field clone copies
-                // the POINTER to building/graphicData/comps, so mutating them below would
-                // edit the host's own conduit def. Every object we touch has to be its own.
-                c.building = CloneOf(n.template.building);
-                c.graphicData = CloneOf(n.template.graphicData);
-                c.comps = CloneComps(n.template.comps);
-                c.statBases = n.template.statBases != null
-                    ? new List<StatModifier>(n.template.statBases)
-                    : null;
-
-                // Never built, never seen, never touched.
-                // ⚠ THERE IS NO `menuHidden` ON ThingDef IN 1.6. A null designationCategory
-                // is what keeps a def out of the architect menu; ArchitectCategoryTab builds
-                // its list from designationCategoryDef.AllResolvedDesignators, so a def that
-                // belongs to no category is unreachable by construction.
-                c.designationCategory = null;
-                c.designatorDropdown = null;
-                c.researchPrerequisites = null;
-                c.costList = null;
-                c.costStuffCount = 0;
-                c.stuffCategories = null;
-                c.selectable = false;
-                c.neverMultiSelect = true;
-                c.destroyable = false;
-                c.useHitPoints = false;
-                c.scatterableOnMapGen = false;
-                c.blocksAltitudes = null;
-
-                // ⚠ THE CARRIER KEEPS THE TEMPLATE'S DRAWER AND GRAPHIC, AND THAT IS A
-                // DELIBERATE REVERSAL OF SLICE 1. `DrawerType.None` was forced back when
-                // carriers were imagined living in GUTTER cells, which must never be
-                // revealed. They do not: a carrier lives in the column's own cell and in
-                // the cell one Slot up, both ordinary band cells. Two field requests both
-                // reduce to this one field:
-                //   1. `SectionLayer_Things.Regenerate` filters on
-                //      `thing.def.drawerType != DrawerType.None`, so an invisible carrier
-                //      is excluded from EVERY section layer - including
-                //      SectionLayer_ThingsPowerGrid, the overlay RimWorld switches on
-                //      while the player is placing a conduit. Keeping the template's
-                //      drawer is what makes a column read as part of the grid at exactly
-                //      the moment the player is deciding where to run pipe.
-                //   2. The up-cell carrier then IS the "corresponding conduit on the floor
-                //      above", drawn in the host's own art, with no second def to author
-                //      and no auto-construction to balance.
-                // ⚠ LINKING SURVIVES THE CLONE. Conduits and pipes link by
-                // `graphicData.linkFlags`, never by defName, so a carrier joins the
-                // player's real pipe runs visually instead of drawing an isolated stub.
-                c.castEdgeShadows = false;
-                c.blockWind = false;
-                c.blockLight = false;
-                c.fillPercent = 0f;
-                c.rotatable = false;
-                c.size = new IntVec2(1, 1);
-
-                if (c.building != null)
+                ThingDef thingDef = (ThingDef)Activator.CreateInstance(n.template.GetType());
+                CopyFields(n.template, thingDef, thingDef.GetType());
+                thingDef.shortHash = 0;
+                thingDef.defName = CarrierDefName(n.id);
+                thingDef.label = n.template.label;
+                thingDef.description = n.template.description;
+                thingDef.modContentPack = n.template.modContentPack;
+                thingDef.building = CloneOf(n.template.building);
+                thingDef.graphicData = CloneOf(n.template.graphicData);
+                thingDef.comps = CloneComps(n.template.comps, n);
+                thingDef.statBases = ((n.template.statBases != null) ? new List<StatModifier>(n.template.statBases) : null);
+                thingDef.designationCategory = null;
+                thingDef.designatorDropdown = null;
+                thingDef.researchPrerequisites = null;
+                thingDef.costList = null;
+                thingDef.costStuffCount = 0;
+                thingDef.stuffCategories = null;
+                thingDef.selectable = false;
+                thingDef.neverMultiSelect = true;
+                thingDef.destroyable = false;
+                thingDef.useHitPoints = false;
+                thingDef.scatterableOnMapGen = false;
+                thingDef.blocksAltitudes = null;
+                thingDef.castEdgeShadows = false;
+                thingDef.blockWind = false;
+                thingDef.blockLight = false;
+                thingDef.fillPercent = 0f;
+                thingDef.rotatable = false;
+                thingDef.size = new IntVec2(1, 1);
+                if (thingDef.building != null)
                 {
-                    c.building.isEdifice = false;
-                    c.building.isInert = true;
-                    c.building.claimable = false;
-                    c.building.ai_chillDestination = false;
-                    c.building.canPlaceOverWall = false;
+                    thingDef.building.isEdifice = false;
+                    thingDef.building.isInert = true;
+                    thingDef.building.claimable = false;
+                    thingDef.building.ai_chillDestination = false;
+                    thingDef.building.canPlaceOverWall = false;
                 }
 
-                if (c.modExtensions == null)
+                if (thingDef.modExtensions == null)
                 {
-                    c.modExtensions = new List<DefModExtension>();
+                    thingDef.modExtensions = new List<DefModExtension>();
                 }
                 else
                 {
-                    c.modExtensions = new List<DefModExtension>(c.modExtensions);
+                    thingDef.modExtensions = new List<DefModExtension>(thingDef.modExtensions);
                 }
-                c.modExtensions.Add(new ABCarrierExt { network = n.id });
 
-                // ⚠ PINNED TO ThingDef. See the banner: inference would file a
-                // RimatomicsThingDef clone under its own database and nothing would find it.
-                DefGenerator.AddImpliedDef<ThingDef>(c);
-                carrierDefs.Add(c);
-                n.carrier = c;
+                thingDef.modExtensions.Add(new ABCarrierExt { network = n.id });
+                GiveCarrierShortHash(thingDef);
+                DefGenerator.AddImpliedDef(thingDef);
+                carrierDefs.Add(thingDef);
+                n.carrier = thingDef;
                 generated++;
             }
-            catch (Exception e)
+            catch (Exception ex)
             {
                 skipped++;
-                Note("carrier generation failed for " + n.id + " (template "
-                    + n.template.defName + "): " + e.Message);
+                Note("carrier generation failed for " + n.id + " (template " + n.template.defName + "): " + ex.Message);
             }
         }
 
@@ -824,32 +796,6 @@ namespace AsAboveSoBelow
                 sb.Append('X');
             }
             return sb.ToString();
-        }
-
-        private static List<CompProperties> CloneComps(List<CompProperties> src)
-        {
-            if (src == null)
-            {
-                return null;
-            }
-            List<CompProperties> outp = new List<CompProperties>(src.Count);
-            for (int i = 0; i < src.Count; i++)
-            {
-                if (src[i] == null)
-                {
-                    continue;
-                }
-                // ⚠ COPY THE PROPS OBJECT, DO NOT SHARE IT. ResolveReferences runs per def
-                // and is handed the parent; a shared CompProperties would be resolved twice
-                // against two different parents, which is a class of bug nobody wants to
-                // debug inside a foreign assembly.
-                CompProperties copy = CloneOf(src[i]);
-                if (copy != null)
-                {
-                    outp.Add(copy);
-                }
-            }
-            return outp;
         }
 
         /// <summary>Shallow field-for-field copy preserving the runtime type. Used for the
@@ -892,6 +838,93 @@ namespace AsAboveSoBelow
                 t = t.BaseType;
             }
         }
+        private static List<CompProperties> CloneComps(List<CompProperties> src, ABNetwork n)
+        {
+            if (src == null)
+            {
+                return null;
+            }
+
+            List<CompProperties> list = new List<CompProperties>(src.Count);
+            for (int i = 0; i < src.Count; i++)
+            {
+                if (src[i] == null)
+                {
+                    continue;
+                }
+
+                if (VetoedComp(src[i]))
+                {
+                    if (n.strippedComps == null)
+                    {
+                        n.strippedComps = new List<string>();
+                    }
+
+                    n.strippedComps.Add(src[i].GetType().Name);
+                    stripped++;
+                }
+                else
+                {
+                    CompProperties compProperties = CloneOf(src[i]);
+                    if (compProperties != null)
+                    {
+                        list.Add(compProperties);
+                    }
+                }
+            }
+
+            return list;
+        }
+
+        private static bool VetoedComp(CompProperties p)
+        {
+            Type type = p.GetType();
+            while (type != null && type != typeof(object))
+            {
+                if (carrierCompVeto.Contains(type.Name))
+                {
+                    return true;
+                }
+
+                type = type.BaseType;
+            }
+
+            return false;
+        }
+
+        private static void GiveCarrierShortHash(ThingDef c)
+        {
+            if (takenShortHashes == null)
+            {
+                takenShortHashes = new HashSet<ushort>();
+                List<ThingDef> allDefsListForReading = DefDatabase<ThingDef>.AllDefsListForReading;
+                for (int i = 0; i < allDefsListForReading.Count; i++)
+                {
+                    takenShortHashes.Add(allDefsListForReading[i].shortHash);
+                }
+            }
+
+            ushort num = (ushort)(GenText.StableStringHash(c.defName) % 65535);
+            while (num == 0 || takenShortHashes.Contains(num))
+            {
+                num++;
+            }
+
+            c.shortHash = num;
+            takenShortHashes.Add(num);
+        }
+
+        internal static IEnumerable<ThingDef> AllCarrierDefs => carrierDefs;
+
+        private static readonly HashSet<string> carrierCompVeto = new HashSet<string>
+        {
+            "CompProperties_SpillWhenDamaged"
+        };
+
+        private static HashSet<ushort> takenShortHashes;
+
+        private static int stripped;
+
     }
 
     // Fallback for a startup where the implied-def hook did not run.

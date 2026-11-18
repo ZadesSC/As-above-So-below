@@ -1,3 +1,5 @@
+using System;
+using System.Text;
 using RimWorld;
 using UnityEngine;
 using Verse;
@@ -303,160 +305,234 @@ namespace AsAboveSoBelow
             return (ia << 33) | (ib << 1) | (overhead ? 1L : 0L);
         }
 
-        private static void Solve(Map map, ABBandMap bands, IntVec3 root, IntVec3 target,
-            int bandRoot, int bandTarg, float range, float minRange, bool overheadFire,
-            out ABShotSolution sol)
+        private static void Solve(Map map, ABBandMap bands, IntVec3 root, IntVec3 target, int bandRoot, int bandTarg, float range, float minRange, bool overheadFire, out ABShotSolution sol)
         {
-            sol = default(ABShotSolution);
+            sol = default;
             sol.bandDelta = bandTarg - bandRoot;
             sol.rootBand = bandRoot;
             sol.targetBand = bandTarg;
-
-            // ⚠ ANISOTROPY: the raw (target - root) vector runs THROUGH THE STACK and is
-            // meaningless. Every distance here is taken with the target brought into the
-            // shooter's own band, which is the only honest horizontal separation. §1's
-            // warning about naive DistanceTo is exactly this trap.
-            IntVec3 targetHere = bands.Translate(target, bandRoot);
-            float horizontal = (targetHere - root).LengthHorizontal;
-
+            IntVec3 intVec = bands.Translate(target, bandRoot);
+            float lengthHorizontal = (intVec - root).LengthHorizontal;
             if (overheadFire)
             {
-                // MAP COORDINATES. Levels do not exist for a shell: it goes up and comes
-                // down wherever it was aimed. Minimum range therefore still bites, measured
-                // horizontally, which is why a mortar cannot drop one on the level directly
-                // below its own feet.
-                Trace("overhead: band-local horizontal " + horizontal.ToString("0.0")
-                    + " vs range " + range.ToString("0.0") + " / minRange "
-                    + minRange.ToString("0.0"));
-                if (horizontal > range || horizontal < minRange)
+                if (trace != null)
                 {
-                    Trace(horizontal > range ? "REJECT: beyond maximum range"
-                        : "REJECT: inside minimum range (a mortar cannot hit its own feet)");
-                    return;
+                    Trace("overhead: band-local horizontal " + lengthHorizontal.ToString("0.0") + " vs range " + range.ToString("0.0") + " / minRange " + minRange.ToString("0.0"));
                 }
-                overheadSolves++;
-                sol.valid = true;
-                sol.overhead = true;
-                sol.opening = IntVec3.Invalid;
-                sol.distance = horizontal;
+
+                if (lengthHorizontal > range || lengthHorizontal < minRange)
+                {
+                    if (trace != null)
+                    {
+                        Trace((lengthHorizontal > range) ? "REJECT: beyond maximum range" : "REJECT: inside minimum range (a mortar cannot hit its own feet)");
+                    }
+                }
+                else
+                {
+                    overheadSolves++;
+                    sol.valid = true;
+                    sol.overhead = true;
+                    sol.opening = IntVec3.Invalid;
+                    sol.distance = lengthHorizontal;
+                }
+
                 return;
             }
 
-            int drop = Mathf.Abs(sol.bandDelta);
-            float dist = horizontal + VerticalCostPerLevel * drop;
-            Trace("levels apart " + drop + ", band-local horizontal "
-                + horizontal.ToString("0.0") + " + vertical cost "
-                + (VerticalCostPerLevel * drop).ToString("0.0") + " = " + dist.ToString("0.0")
-                + " vs range " + range.ToString("0.0"));
-            if (dist > range || dist < minRange)
+            int num = Mathf.Abs(sol.bandDelta);
+            float num2 = LevelCharged(lengthHorizontal, num);
+            if (trace != null)
             {
-                Trace(dist > range ? "REJECT: beyond maximum range"
-                    : "REJECT: inside minimum range");
+                Trace("levels apart " + num + ", band-local horizontal " + lengthHorizontal.ToString("0.0") + " + vertical cost " + (3f * (float)num).ToString("0.0") + " = " + num2.ToString("0.0") + " vs range " + range.ToString("0.0"));
+            }
+
+            if (num2 > range || num2 < minRange)
+            {
+                if (trace != null)
+                {
+                    Trace((num2 > range) ? "REJECT: beyond maximum range" : "REJECT: inside minimum range");
+                }
+
                 return;
             }
-            sol.distance = dist;
 
-            bool firingUp = sol.bandDelta > 0;
-            int upperBand = firingUp ? bandTarg : bandRoot;
-            int lowerBand = firingUp ? bandRoot : bandTarg;
-            IntVec3 upper = firingUp ? target : root;
-            IntVec3 lower = firingUp ? root : target;
-            float driftCap = MaxDriftPerLevel * drop;
+            sol.distance = num2;
+            bool flag = sol.bandDelta > 0;
+            int num3 = (flag ? bandTarg : bandRoot);
+            int lowerBand = (flag ? bandRoot : bandTarg);
+            IntVec3 intVec2 = (flag ? target : root);
+            IntVec3 intVec3 = (flag ? root : target);
+            float num4 = 12f * (float)num;
+            if (trace != null)
+            {
+                string[] array = new string[10]
+                {
+                    "upper participant ",
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null
+                };
+                IntVec3 intVec4 = intVec2;
+                array[1] = intVec4.ToString();
+                array[2] = " (band ";
+                array[3] = num3.ToString();
+                array[4] = "), lower ";
+                intVec4 = intVec3;
+                array[5] = intVec4.ToString();
+                array[6] = " (band ";
+                array[7] = lowerBand.ToString();
+                array[8] = "), drift cap ";
+                array[9] = num4.ToString("0.0");
+                Trace(string.Concat(array));
+            }
 
-            // FAST PATH: straight down (or up) the shaft. The opening directly over the lower
-            // participant, which is the old rule and still the overwhelmingly common case -
-            // someone standing in a stairwell mouth. One terrain read and one line of sight.
-            Trace("upper participant " + upper + " (band " + upperBand + "), lower " + lower
-                + " (band " + lowerBand + "), drift cap " + driftCap.ToString("0.0"));
-            IntVec3 direct = bands.Translate(lower, upperBand);
-            Trace("fast path: opening directly over the lower participant at " + direct);
-            if (Accepts(map, bands, direct, upper, lower, upperBand, lowerBand, driftCap))
+            IntVec3 intVec5 = bands.Translate(intVec3, num3);
+            if (trace != null)
+            {
+                IntVec3 intVec4 = intVec5;
+                Trace("fast path: opening directly over the lower participant at " + intVec4.ToString());
+            }
+
+            if (Accepts(map, bands, intVec5, intVec2, intVec3, num3, lowerBand, num4))
             {
                 fastHits++;
                 sol.valid = true;
-                sol.opening = direct;
+                sol.opening = intVec5;
                 return;
             }
 
-            // BALCONY PATH: walk the line from the lower participant's column toward the
-            // upper participant and take the first opening that works. Walking from the
-            // TARGET end outward is what makes this the balcony rule rather than a wider
-            // fudge factor: the openings nearest the target are the ones a shooter standing
-            // back from the lip would actually use, and the drift cap terminates the walk
-            // early instead of being tested as an afterthought.
             walks++;
-            Trace("balcony path: walking the line from " + direct + " toward " + upper);
-            IntVec3 from = direct;
-            int dx = upper.x - from.x;
-            int dz = upper.z - from.z;
-            int steps = Mathf.Max(Mathf.Abs(dx), Mathf.Abs(dz));
-            if (steps <= 0)
+            if (trace != null)
             {
-                Trace("REJECT: the two participants share a column and the fast path failed");
+                IntVec3 intVec4 = intVec5;
+                string text = intVec4.ToString();
+                intVec4 = intVec2;
+                Trace("balcony path: walking the line from " + text + " toward " + intVec4.ToString());
+            }
+
+            IntVec3 intVec6 = intVec5;
+            int num5 = intVec2.x - intVec6.x;
+            int num6 = intVec2.z - intVec6.z;
+            int num7 = Mathf.Max(Mathf.Abs(num5), Mathf.Abs(num6));
+            if (num7 <= 0)
+            {
+                if (trace != null)
+                {
+                    Trace("REJECT: the two participants share a column and the fast path failed");
+                }
+
                 return;
             }
-            int maxSteps = Mathf.Min(steps, Mathf.CeilToInt(driftCap));
-            for (int i = 1; i <= maxSteps; i++)
+
+            int num8 = Mathf.Min(num7, Mathf.CeilToInt(num4));
+            for (int i = 1; i <= num8; i++)
             {
-                IntVec3 candidate = new IntVec3(
-                    from.x + Mathf.RoundToInt(dx * (i / (float)steps)), 0,
-                    from.z + Mathf.RoundToInt(dz * (i / (float)steps)));
-                if (candidate == direct)
-                {
-                    continue; // already tried, and the fast path is the only place it belongs
-                }
-                if (Accepts(map, bands, candidate, upper, lower, upperBand, lowerBand, driftCap))
+                IntVec3 intVec7 = new IntVec3(intVec6.x + Mathf.RoundToInt((float)num5 * ((float)i / (float)num7)), 0, intVec6.z + Mathf.RoundToInt((float)num6 * ((float)i / (float)num7)));
+                if (!(intVec7 == intVec5) && Accepts(map, bands, intVec7, intVec2, intVec3, num3, lowerBand, num4))
                 {
                     sol.valid = true;
-                    sol.opening = candidate;
+                    sol.opening = intVec7;
                     return;
                 }
             }
-            Trace("REJECT: no cell on the line from the target's column to the shooter is an "
-                + "open column with sight at both ends (tried " + maxSteps + ")");
+
+            if (trace != null)
+            {
+                Trace("REJECT: no cell on the line from the target's column to the shooter is an open column with sight at both ends (tried " + num8 + ")");
+            }
         }
 
         /// <summary>The three tests, in the cheap-first order that matters: a terrain read,
         /// then a column walk of at most bandCount reads, then two line-of-sight traces.</summary>
-        private static bool Accepts(Map map, ABBandMap bands, IntVec3 opening, IntVec3 upper,
-            IntVec3 lower, int upperBand, int lowerBand, float driftCap)
+        private static bool Accepts(Map map, ABBandMap bands, IntVec3 opening, IntVec3 upper, IntVec3 lower, int upperBand, int lowerBand, float driftCap)
         {
-            if (!opening.InBounds(map) || bands.BandOf(opening) != upperBand
-                || bands.InGutter(opening))
+            if (!opening.InBounds(map) || bands.BandOf(opening) != upperBand || bands.InGutter(opening))
             {
-                Trace(opening + ": off map, wrong band, or in the gutter");
+                if (trace != null)
+                {
+                    IntVec3 intVec = opening;
+                    Trace(intVec.ToString() + ": off map, wrong band, or in the gutter");
+                }
+
                 return false;
             }
-            // The cone under the hole. Measured from the OPENING to the LOWER participant,
-            // which is the only pair this cap is about.
-            IntVec3 openingInLower = bands.Translate(opening, lowerBand);
-            float drift = (openingInLower - lower).LengthHorizontal;
-            if (drift > driftCap)
+
+            IntVec3 intVec2 = bands.Translate(opening, lowerBand);
+            float lengthHorizontal = (intVec2 - lower).LengthHorizontal;
+            if (lengthHorizontal > driftCap)
             {
-                Trace(opening + ": drift " + drift.ToString("0.0") + " exceeds cap "
-                    + driftCap.ToString("0.0") + " (outside the cone under the hole)");
+                if (trace != null)
+                {
+                    string[] array = new string[6];
+                    IntVec3 intVec = opening;
+                    array[0] = intVec.ToString();
+                    array[1] = ": drift ";
+                    array[2] = lengthHorizontal.ToString("0.0");
+                    array[3] = " exceeds cap ";
+                    array[4] = driftCap.ToString("0.0");
+                    array[5] = " (outside the cone under the hole)";
+                    Trace(string.Concat(array));
+                }
+
                 return false;
             }
+
             if (!ColumnOpen(map, bands, opening, upperBand, lowerBand))
             {
-                return false; // ColumnOpen traces the offending cell itself
-            }
-            if (opening != upper
-                && !GenSight.LineOfSight(upper, opening, map, skipFirstCell: true))
-            {
-                Trace(opening + ": no line of sight from " + upper
-                    + " to the opening within band " + upperBand);
                 return false;
             }
-            if (openingInLower != lower
-                && !GenSight.LineOfSight(openingInLower, lower, map, skipFirstCell: true))
+
+            if (opening != upper && !GenSight.LineOfSight(upper, opening, map, skipFirstCell: true))
             {
-                Trace(opening + ": open column and sight from above, but no line of sight from "
-                    + "the opening's mouth " + openingInLower + " to " + lower
-                    + " within band " + lowerBand);
+                if (trace != null)
+                {
+                    string[] array2 = new string[5];
+                    IntVec3 intVec = opening;
+                    array2[0] = intVec.ToString();
+                    array2[1] = ": no line of sight from ";
+                    intVec = upper;
+                    array2[2] = intVec.ToString();
+                    array2[3] = " to the opening within band ";
+                    array2[4] = upperBand.ToString();
+                    Trace(string.Concat(array2));
+                }
+
                 return false;
             }
-            Trace(opening + ": ACCEPTED (drift " + drift.ToString("0.0") + ")");
+
+            if (intVec2 != lower && !GenSight.LineOfSight(intVec2, lower, map, skipFirstCell: true))
+            {
+                if (trace != null)
+                {
+                    string[] array3 = new string[7];
+                    IntVec3 intVec = opening;
+                    array3[0] = intVec.ToString();
+                    array3[1] = ": open column and sight from above, but no line of sight from the opening's mouth ";
+                    intVec = intVec2;
+                    array3[2] = intVec.ToString();
+                    array3[3] = " to ";
+                    intVec = lower;
+                    array3[4] = intVec.ToString();
+                    array3[5] = " within band ";
+                    array3[6] = lowerBand.ToString();
+                    Trace(string.Concat(array3));
+                }
+
+                return false;
+            }
+
+            if (trace != null)
+            {
+                IntVec3 intVec = opening;
+                Trace(intVec.ToString() + ": ACCEPTED (drift " + lengthHorizontal.ToString("0.0") + ")");
+            }
+
             return true;
         }
 
@@ -483,31 +559,44 @@ namespace AsAboveSoBelow
         /// kept in step by hand. It is the ONLY descent in the mod allowed to differ, and it
         /// differs in exactly one predicate.
         /// </summary>
-        internal static bool ColumnOpen(Map map, ABBandMap bands, IntVec3 opening, int upperBand,
-            int lowerBand)
+        internal static bool ColumnOpen(Map map, ABBandMap bands, IntVec3 opening, int upperBand, int lowerBand)
         {
             if (map.terrainGrid.TerrainAt(opening) != ABDefOf.AB_OpenAir)
             {
-                Trace(opening + ": terrain is "
-                    + map.terrainGrid.TerrainAt(opening).defName
-                    + ", not AB_OpenAir - nothing to shoot through");
+                if (trace != null)
+                {
+                    IntVec3 intVec = opening;
+                    Trace(intVec.ToString() + ": terrain is " + map.terrainGrid.TerrainAt(opening).defName + ", not AB_OpenAir - nothing to shoot through");
+                }
+
                 return false;
             }
-            // Every band STRICTLY between the two must be open air at this column too. For
-            // adjacent bands this loop does not execute at all, which is why the common case
-            // costs a single terrain read.
-            for (int b = upperBand - 1; b > lowerBand; b--)
+
+            for (int num = upperBand - 1; num > lowerBand; num--)
             {
-                IntVec3 c = bands.Translate(opening, b);
-                if (!c.InBounds(map) || bands.InGutter(c)
-                    || map.terrainGrid.TerrainAt(c) != ABDefOf.AB_OpenAir)
+                IntVec3 intVec2 = bands.Translate(opening, num);
+                if (!intVec2.InBounds(map) || bands.InGutter(intVec2) || map.terrainGrid.TerrainAt(intVec2) != ABDefOf.AB_OpenAir)
                 {
-                    Trace(opening + ": column blocked at " + c + " (band " + b + ", terrain "
-                        + (c.InBounds(map) ? map.terrainGrid.TerrainAt(c).defName : "off map")
-                        + ") - the shot would have to pass through an intervening floor");
+                    if (trace != null)
+                    {
+                        string[] array = new string[8];
+                        IntVec3 intVec = opening;
+                        array[0] = intVec.ToString();
+                        array[1] = ": column blocked at ";
+                        intVec = intVec2;
+                        array[2] = intVec.ToString();
+                        array[3] = " (band ";
+                        array[4] = num.ToString();
+                        array[5] = ", terrain ";
+                        array[6] = (intVec2.InBounds(map) ? map.terrainGrid.TerrainAt(intVec2).defName : "off map");
+                        array[7] = ") - the shot would have to pass through an intervening floor";
+                        Trace(string.Concat(array));
+                    }
+
                     return false;
                 }
             }
+
             return true;
         }
 
@@ -525,5 +614,17 @@ namespace AsAboveSoBelow
             }
             return !verb.verbProps.requireLineOfSight || verb.ProjectileFliesOverhead();
         }
+        private static float LevelCharged(float horizontal, int levels)
+        {
+            return horizontal + 3f * (float)levels;
+        }
+
+        public static float CrossBandDistance(ABBandMap bands, IntVec3 root, IntVec3 target)
+        {
+            int num = bands.BandOf(root);
+            float lengthHorizontal = (bands.Translate(target, num) - root).LengthHorizontal;
+            return LevelCharged(lengthHorizontal, Mathf.Abs(bands.BandOf(target) - num));
+        }
+
     }
 }

@@ -352,52 +352,49 @@ namespace AsAboveSoBelow
         public override void ExposeData()
         {
             base.ExposeData();
-            Scribe_Values.Look(ref verboseLogging, "verboseLogging", false);
-            Scribe_Values.Look(ref unclampMapSize, "unclampMapSize", false);
+            Scribe_Values.Look(ref verboseLogging, "verboseLogging", defaultValue: false);
+            Scribe_Values.Look(ref unclampMapSize, "unclampMapSize", defaultValue: false);
             Scribe_Values.Look(ref pathHeuristic, "pathHeuristic", 1f);
-            Scribe_Values.Look(ref multiLevel, "multiLevel", true);
+            Scribe_Values.Look(ref multiLevel, "multiLevel", defaultValue: true);
             Scribe_Values.Look(ref upperLevels, "upperLevels", 1);
             Scribe_Values.Look(ref lowerLevels, "lowerLevels", 1);
-            Scribe_Values.Look(ref naturalPeaks, "naturalPeaks", true);
-            Scribe_Values.Look(ref skyBiomeInherit, "skyBiomeInherit", true);
+            Scribe_Values.Look(ref naturalPeaks, "naturalPeaks", defaultValue: true);
+            Scribe_Values.Look(ref skyBiomeInherit, "skyBiomeInherit", defaultValue: true);
             Scribe_Values.Look(ref peakSoilFraction, "peakSoilFraction", 0.15f);
-            Scribe_Values.Look(ref peakMeadowCutoff, "peakMeadowCutoff", 0.60f);
+            Scribe_Values.Look(ref peakMeadowCutoff, "peakMeadowCutoff", 0.6f);
             Scribe_Values.Look(ref peakMeadowScale, "peakMeadowScale", 0.024f);
             Scribe_Values.Look(ref peakTerraceMax, "peakTerraceMax", 4);
             Scribe_Values.Look(ref skyVegetationDensity, "skyVegetationDensity", 1f);
-            Scribe_Values.Look(ref bandFeatures, "bandFeatures", true);
-            Scribe_Values.Look(ref bandVegetationParity, "bandVegetationParity", true);
-            Scribe_Values.Look(ref bandLandmarks, "bandLandmarks", true);
+            Scribe_Values.Look(ref bandFeatures, "bandFeatures", defaultValue: true);
+            Scribe_Values.Look(ref bandVegetationParity, "bandVegetationParity", defaultValue: true);
+            Scribe_Values.Look(ref bandLandmarks, "bandLandmarks", defaultValue: true);
             Scribe_Values.Look(ref basementOreDensity, "basementOreDensity", 6f);
-            Scribe_Values.Look(ref basementBiomeChoice, "basementBiomeChoice",
-                BiomesCavernsCompat.RandomChoice);
+            Scribe_Values.Look(ref basementBiomeChoice, "basementBiomeChoice", "Random");
             Scribe_Values.Look(ref cavernOpenness, "cavernOpenness", 0.3f);
             Scribe_Values.Look(ref cavernChamberFreq, "cavernChamberFreq", 0.02f);
             Scribe_Values.Look(ref cavernFormations, "cavernFormations", 1f);
-            Scribe_Values.Look(ref crossLevelTravel, "crossLevelTravel", true);
-            Scribe_Values.Look(ref raiderArriveUpper, "raiderArriveUpper", true);
-            Scribe_Values.Look(ref raiderArriveLower, "raiderArriveLower", false);
-            Scribe_Values.Look(ref raiderLeaveUpper, "raiderLeaveUpper", true);
-            Scribe_Values.Look(ref raiderLeaveLower, "raiderLeaveLower", false);
-            Scribe_Values.Look(ref friendlyArriveUpper, "friendlyArriveUpper", true);
-            Scribe_Values.Look(ref friendlyArriveLower, "friendlyArriveLower", false);
-            Scribe_Values.Look(ref friendlyLeaveUpper, "friendlyLeaveUpper", true);
-            Scribe_Values.Look(ref friendlyLeaveLower, "friendlyLeaveLower", false);
-            Scribe_Values.Look(ref animalArriveUpper, "animalArriveUpper", true);
-            Scribe_Values.Look(ref animalArriveLower, "animalArriveLower", false);
-            Scribe_Values.Look(ref animalLeaveUpper, "animalLeaveUpper", true);
-            Scribe_Values.Look(ref animalLeaveLower, "animalLeaveLower", false);
-            Scribe_Values.Look(ref depthFalloff, "depthFalloff", true);
-            Scribe_Values.Look(ref depthFalloffPerLevel, "depthFalloffPerLevel",
-                ABDepthView.DefaultFalloff);
-            Scribe_Values.Look(ref transitAnim, "transitAnim", true);
-            Scribe_Values.Look(ref clampZoomToLevel, "clampZoomToLevel", true);
-            Scribe_Values.Look(ref ioStackTour, "ioStackTour", false);
-            Scribe_Values.Look(ref psFreezeAvatarWhilePeeking, "psFreezeAvatarWhilePeeking",
-                true);
-            Scribe_Values.Look(ref belowPawnCache, "belowPawnCache",
-                ABBelowRenderCache.ModeAuto);
-            Scribe_Values.Look(ref bandTemperatureOffsets, "bandTemperatureOffsets", true);
+            Scribe_Values.Look(ref crossLevelTravel, "crossLevelTravel", defaultValue: true);
+            Scribe_Values.Look(ref raiderArriveUpper, "raiderArriveUpper", defaultValue: true);
+            Scribe_Values.Look(ref raiderArriveLower, "raiderArriveLower", defaultValue: false);
+            Scribe_Values.Look(ref raiderLeaveUpper, "raiderLeaveUpper", defaultValue: true);
+            Scribe_Values.Look(ref raiderLeaveLower, "raiderLeaveLower", defaultValue: false);
+            Scribe_Values.Look(ref friendlyArriveUpper, "friendlyArriveUpper", defaultValue: true);
+            Scribe_Values.Look(ref friendlyArriveLower, "friendlyArriveLower", defaultValue: false);
+            Scribe_Values.Look(ref friendlyLeaveUpper, "friendlyLeaveUpper", defaultValue: true);
+            Scribe_Values.Look(ref friendlyLeaveLower, "friendlyLeaveLower", defaultValue: false);
+            Scribe_Values.Look(ref animalArriveUpper, "animalArriveUpper", defaultValue: true);
+            Scribe_Values.Look(ref animalArriveLower, "animalArriveLower", defaultValue: false);
+            Scribe_Values.Look(ref animalLeaveUpper, "animalLeaveUpper", defaultValue: true);
+            Scribe_Values.Look(ref animalLeaveLower, "animalLeaveLower", defaultValue: false);
+            Scribe_Values.Look(ref depthFalloff, "depthFalloff", defaultValue: true);
+            Scribe_Values.Look(ref depthFalloffPerLevel, "depthFalloffPerLevel", 0.85f);
+            Scribe_Values.Look(ref transitAnim, "transitAnim", defaultValue: true);
+            Scribe_Values.Look(ref clampZoomToLevel, "clampZoomToLevel", defaultValue: true);
+            Scribe_Values.Look(ref progressRendererLevel, "progressRendererLevel", 0);
+            Scribe_Values.Look(ref ioStackTour, "ioStackTour", defaultValue: false);
+            Scribe_Values.Look(ref psFreezeAvatarWhilePeeking, "psFreezeAvatarWhilePeeking", defaultValue: true);
+            Scribe_Values.Look(ref belowPawnCache, "belowPawnCache", 1);
+            Scribe_Values.Look(ref bandTemperatureOffsets, "bandTemperatureOffsets", defaultValue: true);
             Scribe_Collections.Look(ref skyTempOffsets, "skyTempOffsets", LookMode.Value);
             Scribe_Collections.Look(ref deepTempOffsets, "deepTempOffsets", LookMode.Value);
             Scribe_Collections.Look(ref skyWindFactors, "skyWindFactors", LookMode.Value);
@@ -658,74 +655,59 @@ namespace AsAboveSoBelow
             Text.Font = GameFont.Medium;
             list.Label("AB_TabVisuals".Translate());
             Text.Font = GameFont.Small;
-
-            Color dim = GUI.color;
+            Color color = GUI.color;
             GUI.color = NoteDim;
             list.Label("AB_VisualsNote".Translate());
-            GUI.color = dim;
+            GUI.color = color;
             list.Gap(8f);
-
-            list.CheckboxLabeled("AB_TransitAnim".Translate(), ref transitAnim,
-                "AB_TransitAnimTip".Translate());
-
-            bool falloffWas = depthFalloff;
-            list.CheckboxLabeled("AB_DepthFalloff".Translate(), ref depthFalloff,
-                "AB_DepthFalloffTip".Translate());
-            if (falloffWas != depthFalloff)
+            DoProgressRenderer(list);
+            list.CheckboxLabeled("AB_TransitAnim".Translate(), ref transitAnim, "AB_TransitAnimTip".Translate());
+            bool flag = depthFalloff;
+            list.CheckboxLabeled("AB_DepthFalloff".Translate(), ref depthFalloff, "AB_DepthFalloffTip".Translate());
+            if (flag != depthFalloff)
             {
                 bakedVisualDirty = true;
             }
+
             if (depthFalloff)
             {
-                float three = depthFalloffPerLevel * depthFalloffPerLevel * depthFalloffPerLevel;
-                list.Label("AB_DepthFalloffAmount".Translate(
-                    depthFalloffPerLevel.ToStringPercent(), three.ToStringPercent()));
-                float chosen = list.Slider(depthFalloffPerLevel,
-                    ABDepthView.MinFalloff, ABDepthView.MaxFalloff);
-                if (Mathf.Abs(chosen - depthFalloffPerLevel) > 0.0005f)
+                float f = depthFalloffPerLevel * depthFalloffPerLevel * depthFalloffPerLevel;
+                list.Label("AB_DepthFalloffAmount".Translate(depthFalloffPerLevel.ToStringPercent(), f.ToStringPercent()));
+                float num = list.Slider(depthFalloffPerLevel, 0.6f, 1f);
+                if (Mathf.Abs(num - depthFalloffPerLevel) > 0.0005f)
                 {
-                    depthFalloffPerLevel = chosen;
+                    depthFalloffPerLevel = num;
                     bakedVisualDirty = true;
                 }
             }
 
-            // No bakedVisualDirty on any of these: the pawn cache is a realtime draw path,
-            // nothing about it reaches the printed mesh.
             list.Gap(10f);
             list.Label("AB_BelowPawnCache".Translate());
-            if (list.RadioButton("AB_BelowPawnCacheAuto".Translate(),
-                    belowPawnCache == ABBelowRenderCache.ModeAuto, 8f,
-                    "AB_BelowPawnCacheAutoTip".Translate()))
+            if (list.RadioButton("AB_BelowPawnCacheAuto".Translate(), belowPawnCache == 1, 8f, "AB_BelowPawnCacheAutoTip".Translate()))
             {
-                belowPawnCache = ABBelowRenderCache.ModeAuto;
+                belowPawnCache = 1;
             }
-            if (list.RadioButton("AB_BelowPawnCacheAggressive".Translate(),
-                    belowPawnCache == ABBelowRenderCache.ModeAggressive, 8f,
-                    "AB_BelowPawnCacheAggressiveTip".Translate()))
+
+            if (list.RadioButton("AB_BelowPawnCacheAggressive".Translate(), belowPawnCache == 2, 8f, "AB_BelowPawnCacheAggressiveTip".Translate()))
             {
-                belowPawnCache = ABBelowRenderCache.ModeAggressive;
+                belowPawnCache = 2;
             }
-            if (list.RadioButton("AB_BelowPawnCacheOff".Translate(),
-                    belowPawnCache == ABBelowRenderCache.ModeOff, 8f,
-                    "AB_BelowPawnCacheOffTip".Translate()))
+
+            if (list.RadioButton("AB_BelowPawnCacheOff".Translate(), belowPawnCache == 0, 8f, "AB_BelowPawnCacheOffTip".Translate()))
             {
-                belowPawnCache = ABBelowRenderCache.ModeOff;
+                belowPawnCache = 0;
             }
 
             list.Gap(10f);
-            list.CheckboxLabeled("AB_ClampZoom".Translate(), ref clampZoomToLevel,
-                "AB_ClampZoomTip".Translate());
-            // Only shown to players who actually run Perspective Shift: a checkbox about a
-            // mod you do not have is noise.
+            list.CheckboxLabeled("AB_ClampZoom".Translate(), ref clampZoomToLevel, "AB_ClampZoomTip".Translate());
             if (PerspectiveShiftCompat.Present)
             {
-                list.CheckboxLabeled("AB_PSFreezePeek".Translate(),
-                    ref psFreezeAvatarWhilePeeking, "AB_PSFreezePeekTip".Translate());
+                list.CheckboxLabeled("AB_PSFreezePeek".Translate(), ref psFreezeAvatarWhilePeeking, "AB_PSFreezePeekTip".Translate());
             }
+
             if (ImmersiveOpeningCompat.Present)
             {
-                list.CheckboxLabeled("AB_IOStackTour".Translate(), ref ioStackTour,
-                    "AB_IOStackTourTip".Translate());
+                list.CheckboxLabeled("AB_IOStackTour".Translate(), ref ioStackTour, "AB_IOStackTourTip".Translate());
             }
         }
 
@@ -1087,5 +1069,41 @@ namespace AsAboveSoBelow
                 }
             }
         }
+        private void DoProgressRenderer(Listing_Standard list)
+        {
+            if (ProgressRendererCompat.Present)
+            {
+                list.Label("AB_PRLevel".Translate());
+                Color color = GUI.color;
+                GUI.color = NoteDim;
+                list.Label("AB_PRLevelNote".Translate());
+                string text = ProgressRendererCompat.DescribeTarget();
+                if (!string.IsNullOrEmpty(text))
+                {
+                    list.Label(text);
+                }
+
+                GUI.color = color;
+                if (list.RadioButton("AB_PRLevelTopmost".Translate(), progressRendererLevel == 0, 8f, "AB_PRLevelTopmostTip".Translate()))
+                {
+                    progressRendererLevel = 0;
+                }
+
+                if (list.RadioButton("AB_PRLevelSurface".Translate(), progressRendererLevel == 1, 8f, "AB_PRLevelSurfaceTip".Translate()))
+                {
+                    progressRendererLevel = 1;
+                }
+
+                if (list.RadioButton("AB_PRLevelViewed".Translate(), progressRendererLevel == 2, 8f, "AB_PRLevelViewedTip".Translate()))
+                {
+                    progressRendererLevel = 2;
+                }
+
+                list.GapLine(10f);
+            }
+        }
+
+        public int progressRendererLevel = 0;
+
     }
 }

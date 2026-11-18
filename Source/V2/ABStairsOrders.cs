@@ -39,7 +39,16 @@ namespace AsAboveSoBelow
         /// </summary>
         public override IEnumerable<FloatMenuOption> GetOptionsFor(Thing clickedThing, FloatMenuContext context)
         {
-            return TravelOptionsFor(context.FirstSelectedPawn, clickedThing as Building_ABStairs2);
+            List<Pawn> list = new List<Pawn>();
+            foreach (Pawn validSelectedPawn in context.ValidSelectedPawns)
+            {
+                if (validSelectedPawn != null)
+                {
+                    list.Add(validSelectedPawn);
+                }
+            }
+
+            return TravelOptionsFor(list, clickedThing as Building_ABStairs2);
         }
 
         /// <summary>
@@ -53,105 +62,117 @@ namespace AsAboveSoBelow
         /// </summary>
         internal static List<FloatMenuOption> TravelOptionsFor(Pawn pawn, Building_ABStairs2 stairs)
         {
-            List<FloatMenuOption> options = new List<FloatMenuOption>();
+            List<Pawn> list = new List<Pawn>(1);
+            if (pawn != null)
+            {
+                list.Add(pawn);
+            }
+
+            return TravelOptionsFor(list, stairs);
+        }
+        internal static List<FloatMenuOption> TravelOptionsFor(List<Pawn> pawns, Building_ABStairs2 stairs)
+        {
+            List<FloatMenuOption> list = new List<FloatMenuOption>();
             try
             {
                 if (!ABGuard.On(ABGuard.Movement))
                 {
-                    return options;
+                    return list;
                 }
-                if (stairs == null || !stairs.Spawned)
-                {
-                    return options;
-                }
-                if (pawn == null || pawn.Map != stairs.Map)
-                {
-                    return options;
-                }
-                ABBandMap bands = ABBands.CompOf(stairs.Map);
-                if (bands == null || !bands.Banded)
-                {
-                    return options;
-                }
-                bool reachable = pawn.CanReach(stairs, PathEndMode.OnCell, Danger.Deadly);
-                int myBand = bands.BandOf(stairs.Position);
-                bool multi = stairs.Counterparts.Count > 1;
 
-                for (int i = 0; i < stairs.Counterparts.Count; i++)
+                if (stairs == null || !stairs.Spawned || pawns == null || pawns.Count == 0)
                 {
-                    Building_ABStairs2 far = stairs.Counterparts[i];
-                    if (far == null || !far.Spawned)
+                    return list;
+                }
+
+                List<Pawn> movers = new List<Pawn>(pawns.Count);
+                for (int i = 0; i < pawns.Count; i++)
+                {
+                    Pawn pawn = pawns[i];
+                    if (pawn != null && pawn.Spawned && pawn.Map == stairs.Map && pawn.CanReach(stairs, PathEndMode.OnCell, Danger.Deadly))
+                    {
+                        movers.Add(pawn);
+                    }
+                }
+
+                Pawn pawn2 = ((movers.Count > 0) ? movers[0] : pawns[0]);
+                if (pawn2 == null || pawn2.Map != stairs.Map)
+                {
+                    return list;
+                }
+
+                ABBandMap aBBandMap = ABBands.CompOf(stairs.Map);
+                if (aBBandMap == null || !aBBandMap.Banded)
+                {
+                    return list;
+                }
+
+                bool flag = movers.Count > 0;
+                int num = aBBandMap.BandOf(stairs.Position);
+                bool flag2 = stairs.Counterparts.Count > 1;
+                for (int j = 0; j < stairs.Counterparts.Count; j++)
+                {
+                    Building_ABStairs2 building_ABStairs = stairs.Counterparts[j];
+                    if (building_ABStairs == null || !building_ABStairs.Spawned)
                     {
                         continue;
                     }
-                    int delta = bands.BandOf(far.Position) - myBand;
-                    // §85.23: the verb belongs to the LINK KIND. This said "the stairs" for
-                    // every def, so an elevator's right-click read "Take the stairs to level X"
-                    // (field report). Same kind test ABStairAnim uses: linksAllLevels is the
-                    // elevator, "Ladder" in the defName is a ladder, everything else stairs.
+
+                    int num2 = aBBandMap.BandOf(building_ABStairs.Position) - num;
                     string key;
                     if (stairs.LinksAllLevels)
                     {
-                        key = delta > 0 ? "AB_GoUpElevator" : "AB_GoDownElevator";
+                        key = ((num2 > 0) ? "AB_GoUpElevator" : "AB_GoDownElevator");
                     }
-                    else if (stairs.def.defName.IndexOf("Ladder", StringComparison.Ordinal) >= 0)
+                    else if (stairs.def.defName.IndexOf("Ladder", StringComparison.Ordinal) < 0)
                     {
-                        key = delta > 0 ? "AB_GoUpLadder" : "AB_GoDownLadder";
+                        key = ((num2 > 0) ? "AB_GoUp" : "AB_GoDown");
                     }
                     else
                     {
-                        key = delta > 0 ? "AB_GoUp" : "AB_GoDown";
+                        key = ((num2 > 0) ? "AB_GoUpLadder" : "AB_GoDownLadder");
                     }
-                    string label = key.Translate();
-                    if (multi)
+
+                    string text = key.Translate();
+                    if (flag2)
                     {
-                        // Two ends can share a direction (a sky elevator goes down to the
-                        // surface AND down to the basement) - the level disambiguates.
-                        label = "AB_GoToLevel".Translate(label,
-                            ABBands.LevelOf(stairs.Map, far.Position));
+                        text = "AB_GoToLevel".Translate(text, ABBands.LevelOf(stairs.Map, building_ABStairs.Position));
                     }
-                    if (!reachable)
+
+                    if (!flag)
                     {
-                        options.Add(new FloatMenuOption(label + " (" + "NoPath".Translate() + ")", null));
+                        list.Add(new FloatMenuOption(text + " (" + "NoPath".Translate() + ")", null));
                         continue;
                     }
-                    // ⚠⚠ AIM AT THE TILE IN FRONT OF THE FAR OPENING, NOT AT THE LINK.
-                    // This was `far.Position` - a cell INSIDE the far link's own footprint -
-                    // and it quietly undid §85's landing rule: the pawn crossed, was set down
-                    // on the front tile by LandingCell, and then this job walked it back ONTO
-                    // the staircase and left it standing there. The arrival was never the
-                    // bug; the destination was.
-                    //
-                    // ⚠ THE FALLBACK IS THE OLD BEHAVIOUR VERBATIM, and it is the ELEVATOR's
-                    // normal path, not an error case: DisembarkCell returns Invalid for a
-                    // non-directional link, so an elevator order still aims at the car and
-                    // the pawn arrives inside it (user's call, §85). A stairs/ladder whose
-                    // front tile is walled in, out of bounds or across a seam degrades to the
-                    // same place it has always gone rather than refusing to travel.
-                    //
-                    // ⚠ THIS DOES NOT DIVERT THE ROUTE. TryGetTransit scores candidate pairs
-                    // partly on the far anchor's distance to the destination, and the front
-                    // tile is ONE CELL from the link the player clicked - so the intended
-                    // pair still wins by the same margin `far.Position` won by.
-                    IntVec3 dest = ABLinkApproach.DisembarkCell(far);
+
+                    IntVec3 dest = ABLinkApproach.DisembarkCell(building_ABStairs);
                     if (!dest.IsValid)
                     {
-                        dest = far.Position;
+                        dest = building_ABStairs.Position;
                     }
-                    options.Add(FloatMenuUtility.DecoratePrioritizedTask(
-                        new FloatMenuOption(label, delegate
+
+                    list.Add(FloatMenuUtility.DecoratePrioritizedTask(new FloatMenuOption(text, () =>
+                    {
+                        for (int k = 0; k < movers.Count; k++)
                         {
-                            Job job = JobMaker.MakeJob(JobDefOf.Goto, dest);
-                            job.locomotionUrgency = LocomotionUrgency.Jog;
-                            pawn.jobs.TryTakeOrderedJob(job, JobTag.Misc);
-                        }), pawn, dest));
+                            Pawn pawn3 = movers[k];
+                            if (pawn3 != null && pawn3.Spawned && pawn3.jobs != null)
+                            {
+                                Job job = JobMaker.MakeJob(JobDefOf.Goto, dest);
+                                job.locomotionUrgency = LocomotionUrgency.Jog;
+                                pawn3.jobs.TryTakeOrderedJob(job, JobTag.Misc);
+                            }
+                        }
+                    }), pawn2, dest));
                 }
             }
             catch (Exception e)
             {
                 ABGuard.Disable(ABGuard.Movement, e, "V2 stairs float menu");
             }
-            return options;
+
+            return list;
         }
+
     }
 }

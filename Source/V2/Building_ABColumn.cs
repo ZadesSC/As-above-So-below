@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Text;
 using RimWorld;
@@ -242,7 +243,7 @@ namespace AsAboveSoBelow
             }
             StringBuilder sb = new StringBuilder();
             ABBandMap bands = ABBands.CompOf(map);
-            List<Building> all = map.listerBuildings.allBuildingsColonist;
+            List<Thing> all = map.listerThings.AllThings;
             int found = 0;
             for (int i = 0; i < all.Count; i++)
             {

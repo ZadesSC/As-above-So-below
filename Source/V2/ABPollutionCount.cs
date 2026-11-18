@@ -28,6 +28,8 @@ namespace AsAboveSoBelow
                 }
             }
 
+            internal void Invalidate() => dirty = true;
+
             public int Get(Map map)
             {
                 int tick = Find.TickManager?.TicksGame ?? 0;
@@ -52,6 +54,14 @@ namespace AsAboveSoBelow
             new ConditionalWeakTable<Map, CountCache>();
 
         internal static int Get(Map map) => Counts.GetValue(map, key => new CountCache(key)).Get(map);
+
+        internal static void Invalidate(Map map)
+        {
+            if (Counts.TryGetValue(map, out CountCache entry))
+            {
+                entry.Invalidate();
+            }
+        }
 
         internal static void ClearPollutedAir(Map map)
         {

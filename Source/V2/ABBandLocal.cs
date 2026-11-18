@@ -46,18 +46,21 @@ namespace AsAboveSoBelow
             {
                 return false;
             }
-            if (!ABBandedGeneration.TryPendingSurfaceRect(map, out CellRect surface, out int s) || s <= 0)
+
+            if (!ABBandedGeneration.TryPendingSurfaceRect(map, out var surface, out var slot2) || slot2 <= 0)
             {
                 return false;
             }
-            int h = surface.Height;
-            if (h <= 0 || h >= map.Size.z)
+
+            int height = surface.Height;
+            if (height <= 0 || height >= map.Size.z)
             {
-                return false; // unbanded, or a degenerate plan - leave vanilla untouched
+                return false;
             }
-            bandHeight = h;
-            slot = s;
-            offset = (map.Size.z - h) / 2;
+
+            bandHeight = height;
+            slot = slot2;
+            offset = surface.minZ;
             return true;
         }
 
