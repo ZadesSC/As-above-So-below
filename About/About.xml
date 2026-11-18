@@ -119,6 +119,7 @@ Every one of these is optional. Nothing loads unless you already own the mod.
 [/list]</description>
   <supportedVersions>
     <li>1.6</li>
+    <li>1.7</li>
   </supportedVersions>
   <modDependencies>
     <li>
@@ -141,6 +142,7 @@ Every one of these is optional. Nothing loads unless you already own the mod.
     <li>sarg.alphabiomes</li>
     <li>XMB.AncientUrbanrUins.MO</li>
     <li>Krkr.rule56</li>
+    <li>CETeam.CombatExtended</li>
   </loadAfter>
   <incompatibleWith>
     <!-- The original As above, So below. This is a ground-up rearchitecture of the

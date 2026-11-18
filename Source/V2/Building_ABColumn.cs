@@ -71,7 +71,51 @@ namespace AsAboveSoBelow
                 }
             }
             EnsureRoof();
-            EnsureCarriers();
+            if (!respawningAfterLoad)
+            {
+                EnsureCarriers();
+            }
+        }
+
+        internal static void ReconcileCarriers(Map map)
+        {
+            var seen = new HashSet<IntVec3>();
+            var duplicates = new List<Thing>();
+            foreach (ABNetwork network in ABColumnNetworks.All)
+            {
+                if (network.carrier == null)
+                {
+                    continue;
+                }
+
+                seen.Clear();
+                foreach (Thing carrier in map.listerThings.ThingsOfDef(network.carrier))
+                {
+                    if (carrier.Spawned && !seen.Add(carrier.Position))
+                    {
+                        duplicates.Add(carrier);
+                    }
+                }
+            }
+
+            foreach (Thing duplicate in duplicates)
+            {
+                duplicate.Destroy();
+            }
+
+            // Snapshot the columns because spawning a carrier can change building lists.
+            var columns = new List<Building_ABColumn>();
+            foreach (Building building in map.listerBuildings.allBuildingsColonist)
+            {
+                if (building is Building_ABColumn column)
+                {
+                    columns.Add(column);
+                }
+            }
+            foreach (Building_ABColumn column in columns)
+            {
+                column.EnsureCarriers();
+            }
         }
 
         public override void DeSpawn(DestroyMode mode = DestroyMode.Vanish)

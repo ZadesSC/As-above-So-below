@@ -698,3 +698,52 @@ namespace AsAboveSoBelow
         }
     }
 }
+
+namespace AsAboveSoBelow
+{
+    [HarmonyPatch(typeof(IntVec3Utility), nameof(IntVec3Utility.DistanceToEdge))]
+    internal static class Patch_IntVec3Utility_ABBandDistanceToEdge
+    {
+        private static bool Prefix(IntVec3 v, Map map, ref int __result)
+        {
+            if (!ABBandSafety.TryBandRectOf(map, v, out CellRect band))
+            {
+                return true;
+            }
+
+            int x = Math.Min(v.x - band.minX, band.maxX - v.x);
+            int z = Math.Min(v.z - band.minZ, band.maxZ - v.z);
+            __result = Math.Max(0, Math.Min(x, z));
+            return false;
+        }
+    }
+
+    [HarmonyPatch(typeof(CellFinder), nameof(CellFinder.RandomNotEdgeCell))]
+    internal static class Patch_CellFinder_ABRandomNotEdgeCell
+    {
+        private static bool Prefix(int minEdgeDistance, Map map, ref IntVec3 __result)
+        {
+            ABBandMap bands = ABBands.CompOf(map);
+            CellRect surface;
+            if (bands != null && bands.Banded)
+            {
+                surface = bands.RectOfBand(bands.surfaceBand);
+            }
+            else if (!ABBandedGeneration.TryPendingSurfaceRect(map, out surface, out _))
+            {
+                return true;
+            }
+
+            int margin = Math.Max(0, minEdgeDistance);
+            if (margin > (surface.Width - 1) / 2 || margin > (surface.Height - 1) / 2)
+            {
+                __result = IntVec3.Invalid;
+                return false;
+            }
+
+            __result = new IntVec3(Rand.RangeInclusive(surface.minX + margin, surface.maxX - margin),
+                0, Rand.RangeInclusive(surface.minZ + margin, surface.maxZ - margin));
+            return false;
+        }
+    }
+}

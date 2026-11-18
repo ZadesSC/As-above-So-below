@@ -894,9 +894,16 @@ namespace AsAboveSoBelow
         }
     }
 
-    /// <summary>
-    /// The one hook. See ABColumnNetworks' banner for why this exact moment and no other.
-    /// </summary>
+    // Fallback for a startup where the implied-def hook did not run.
+    [StaticConstructorOnStartup]
+    internal static class ABColumnNetworksBoot
+    {
+        static ABColumnNetworksBoot()
+        {
+            ABColumnNetworks.Scan();
+        }
+    }
+
     [HarmonyPatch(typeof(DefGenerator), nameof(DefGenerator.GenerateImpliedDefs_PreResolve))]
     public static class Patch_DefGenerator_ABColumnCarriers
     {

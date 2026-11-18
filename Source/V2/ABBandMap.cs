@@ -378,6 +378,11 @@ namespace AsAboveSoBelow
                 Log.Error(ABLog.Tag + " V2: sky-sync repair threw (map left as-is): " + e);
             }
 
+            Building_ABColumn.ReconcileCarriers(map);
+#if RIMWORLD_17
+            ABPollutionCount.ClearPollutedAir(map);
+#endif
+
             // Always open on the ground floor. Runs for a new colony AND for a loaded save,
             // so a save taken while looking at the sky or the basement still comes back to
             // the surface. The camera has to be moved explicitly rather than left to the

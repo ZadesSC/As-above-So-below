@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Patch>
+  <!-- Open air (and every gutter row, which is open air too) is not ground. Left at the
+       default it was in PollutionGrid's pollutable-cell count, so the world tile's pollution
+       share was diluted by the sky, and pollution could be placed on it.
+       1.7 only: the 1.7 assembly clears already-polluted open air on load
+       (ABPollutionCount.ClearAirPollution). The frozen 1.6 assembly cannot, so on 1.6 this
+       change would leave old polluted air in the numerator after removing it from the
+       denominator. -->
+  <Operation Class="PatchOperationAdd">
+    <xpath>Defs/TerrainDef[defName="AB_OpenAir"]</xpath>
+    <value>
+      <canBePolluted>false</canBePolluted>
+    </value>
+  </Operation>
+</Patch>
