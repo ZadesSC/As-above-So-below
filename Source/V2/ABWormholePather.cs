@@ -868,7 +868,7 @@ namespace AsAboveSoBelow
         /// anchor-then-anywhere behaviour, which is the crowd case and wants a body-shaped
         /// answer more than a pretty one.
         /// </summary>
-        private static IntVec3 LandingCell(Pawn pawn, Building_Door far)
+        private static IntVec3 PickLandingCell(Building_Door far)
         {
             IntVec3 anchor = far.Position;
             Map map = far.Map;
@@ -901,6 +901,124 @@ namespace AsAboveSoBelow
                 return spot;
             }
             return anchor;
+        }
+
+        private static IntVec3 LandingCell(Pawn pawn, Building_Door far)
+        {
+            IntVec3 landing = PickLandingCell(far);
+            Map map = far.Map;
+            if (map == null || far.def.defName is not ("AB2_LadderUp" or "AB2_LadderDown"
+                or "AB2_StairsUp" or "AB2_StairsDown")
+                || !ABLinkApproach.TryGet(far, out ABApproach approach))
+            {
+                return landing;
+            }
+
+            CellRect footprint = far.OccupiedRect();
+            TraverseParms traverse = TraverseParms.For(pawn, Danger.Deadly, TraverseMode.ByPawn);
+            bool forbidAware = ABBandComponents.RespectsForbiddenDoors(pawn);
+            int Component(IntVec3 cell) => ABBandComponents.ComponentOf(map, cell, forbidAware);
+
+            bool Reachable(IntVec3 from, IntVec3 to)
+            {
+                // Synthetic stair links and diagonal corners can make region reachability
+                // optimistic. Landing must be connected by walkable cells on this floor.
+                int component = Component(from);
+                return component >= 0 && component == Component(to)
+                    && map.reachability.CanReach(from, to, PathEndMode.OnCell, traverse);
+            }
+
+            bool CanStandOutside(IntVec3 cell) => cell.Standable(map)
+                && cell.GetEdifice(map) is not Building_Door;
+
+            bool UsableExit(IntVec3 cell) => !footprint.Contains(cell)
+                && Reachable(approach.mouth, cell) && CanStandOutside(cell);
+
+            IntVec3 exit = UsableExit(approach.outside) ? approach.outside : IntVec3.Invalid;
+            if (!exit.IsValid)
+            {
+                // A corner ladder may open into the room along another edge of its footprint.
+                IntVec3 side = new IntVec3(approach.outward.z, 0, approach.outward.x);
+                for (int distance = 1; distance <= LandingRadius && !exit.IsValid; distance++)
+                {
+                    IntVec3 right = approach.outside + side * distance;
+                    IntVec3 left = approach.outside - side * distance;
+                    if (UsableExit(right))
+                        exit = right;
+                    else if (UsableExit(left))
+                        exit = left;
+                }
+            }
+
+            if (!exit.IsValid)
+            {
+                // A doorway or sandbags can be the only way out. Follow reachable
+                // pass-through cells until there is room to stand clear of the footprint.
+                Queue<IntVec3> boundary = new Queue<IntVec3>();
+                HashSet<IntVec3> visited = new HashSet<IntVec3>();
+                foreach (IntVec3 cell in footprint)
+                    foreach (IntVec3 direction in GenAdj.CardinalDirections)
+                        boundary.Enqueue(cell + direction);
+
+                while (boundary.Count > 0)
+                {
+                    IntVec3 cell = boundary.Dequeue();
+                    if (footprint.Contains(cell) || !visited.Add(cell) || !Reachable(approach.mouth, cell))
+                        continue;
+                    if (CanStandOutside(cell))
+                    {
+                        exit = cell;
+                        break;
+                    }
+
+                    if (cell.GetEdifice(map) is Building_Door door
+                        && (door.IsForbiddenToPass(pawn) || !(door.Open || door.PawnCanOpen(pawn))))
+                        continue;
+                    foreach (IntVec3 direction in GenAdj.CardinalDirections)
+                        boundary.Enqueue(cell + direction);
+                }
+            }
+
+            if (!exit.IsValid)
+                return IntVec3.Invalid;
+            bool CanLand(IntVec3 cell) => Reachable(exit, cell)
+                && (footprint.Contains(cell) || CanStandOutside(cell));
+            if (CanLand(landing))
+                return landing;
+
+            bool FreeReachable(IntVec3 cell) => CanLand(cell) && cell.GetFirstPawn(map) == null;
+
+            if (FreeReachable(exit))
+                return exit;
+            if (FreeReachable(approach.mouth))
+                return approach.mouth;
+            if (FreeReachable(far.Position))
+                return far.Position;
+
+            for (int distance = 1; distance <= LandingRadius; distance++)
+            {
+                for (int x = -distance; x <= distance; x++)
+                {
+                    for (int z = -distance; z <= distance; z++)
+                    {
+                        IntVec3 cell = far.Position + new IntVec3(x, 0, z);
+                        if (Math.Max(Math.Abs(x), Math.Abs(z)) == distance && FreeReachable(cell))
+                            return cell;
+                    }
+                }
+            }
+
+            // A crowded exit may temporarily share the mouth.
+            return Reachable(exit, approach.mouth) ? approach.mouth : exit;
+        }
+
+        private static void CancelBlockedLanding(Pawn pawn)
+        {
+            Clear(pawn);
+            ABStairAnim.Clear(pawn);
+            ABTransitVisuals.Clear(pawn);
+            pawn.pather?.StopDead();
+            pawn.jobs?.EndCurrentJob(JobCondition.Incompletable, false);
         }
 
         /// <summary>Scratch for ApproachLanding. Never held across a call.</summary>
@@ -1152,6 +1270,11 @@ namespace AsAboveSoBelow
         private static void CarryNow(Pawn pawn, Transit t)
         {
             IntVec3 landing = LandingCell(pawn, t.far);
+            if (!landing.IsValid)
+            {
+                CancelBlockedLanding(pawn);
+                return;
+            }
             ABV2Debug.Transit("TRANSITED " + pawn.LabelShort + " " + t.near.Position
                 + " -> " + landing + " (anchor " + t.far.Position + ")"
                 + "; resuming to " + t.realDest.Cell);
@@ -1355,6 +1478,11 @@ namespace AsAboveSoBelow
             // teleport and kept dropping every pawn onto the anchor cell itself, so half the
             // transits still stacked even after the sweep was fixed.
             IntVec3 landing = LandingCell(pawn, t.far);
+            if (!landing.IsValid)
+            {
+                CancelBlockedLanding(pawn);
+                return true;
+            }
             pawn.Position = landing;
             // endCurrentJob:false - the job is mid-flight and must survive the hop.
             pawn.Notify_Teleported(false, true);
