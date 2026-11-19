@@ -347,6 +347,7 @@ namespace AsAboveSoBelow
             // FIRST, unconditionally: this instance is the authoritative component, so
             // repair any cache that latched a mid-load placeholder (see RebindAfterLoad).
             ABBands.RebindAfterLoad(map, this);
+            Building_ABColumn.RestoreCarriers(map);
             Patch_MixedBiome_ABBandBiomeAt.Forget();
             if (!Banded)
             {
