@@ -1,7 +1,6 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
-using System.Linq;
 using System.Reflection;
 using System.Text;
 using HarmonyLib;
@@ -178,7 +177,6 @@ namespace AsAboveSoBelow
                     prefix = compName.Split('.')[0] + ".",
                     name = compName.Split('.')[0],
                     dirtyAll = AccessTools.Method(mapComp, "DirtyAllPipeGrids"),
-                    cachedPipes = AccessTools.Field(mapComp, "cachedPipes"),
                     regen = AccessTools.Method(mapComp, "RegenPipeGrids")
                 };
                 ConfigureGridLayers(mapComp, net, family);
@@ -209,6 +207,7 @@ namespace AsAboveSoBelow
             family.closed = AccessTools.Property(family.compPipe, "closed");
             family.gridId = AccessTools.Property(family.compPipe, "GridID");
             family.pipeGrid = AccessTools.Field(mapComp, "PipeGrid");
+            family.cachedPipes = AccessTools.Field(mapComp, "cachedPipes");
             family.netId = AccessTools.Field(net, "NetID");
             family.netType = AccessTools.Field(net, "NetType");
             family.cells = AccessTools.Field(net, "cells");
@@ -235,42 +234,6 @@ namespace AsAboveSoBelow
             for (Type type = holder?.GetType(); type != null && family == null; type = type.BaseType)
                 families.TryGetValue(type, out family);
             return family;
-        }
-
-        [HarmonyPatch]
-        private static class SkipNetworkLookupWhenRestoring
-        {
-            private static bool Prepare() => TargetMethods().Any();
-
-            private static IEnumerable<MethodBase> TargetMethods()
-            {
-                foreach ((string compName, _) in Hosts)
-                {
-                    Type host = AccessTools.TypeByName(compName);
-                    Type pipe = AccessTools.TypeByName(compName.Split('.')[0] + ".CompPipe");
-                    if (host == null || pipe == null)
-                        continue;
-                    MethodInfo deregister = AccessTools.Method(host, "DeregisterPipe", new[] { pipe });
-                    if (deregister != null)
-                        yield return deregister;
-                }
-            }
-
-            private static bool Prefix(object __instance, ThingComp __0)
-            {
-                if (!Building_ABColumn.IsRemovingDuplicateCarrier(__0?.parent))
-                    return true;
-
-                Family family = FamilyFor(__instance);
-                if (family?.dirtyAll == null || !(family.cachedPipes?.GetValue(__instance) is IList pipes))
-                    return true;
-
-                // A host may lazily rebuild when its unregister method reads the pipe's
-                // network. Remove the duplicate registration before any new grid is built.
-                pipes.Remove(__0);
-                family.dirtyAll.Invoke(__instance, null);
-                return false;
-            }
         }
 
         private static bool Prefix(object __instance, MethodBase __originalMethod, int P)

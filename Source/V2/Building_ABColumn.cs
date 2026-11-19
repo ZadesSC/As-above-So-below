@@ -77,43 +77,10 @@ namespace AsAboveSoBelow
                 EnsureCarriers();
         }
 
-        [ThreadStatic]
-        private static Thing duplicateBeingRemoved;
-
-        internal static bool IsRemovingDuplicateCarrier(Thing thing) => thing != null
-            && ReferenceEquals(thing, duplicateBeingRemoved);
-
         internal static void RestoreCarriers(Map map)
         {
             // Saved carriers spawn independently of their columns. Restore missing
             // carriers after both have loaded so spawn order cannot create duplicates.
-            var duplicates = new List<Thing>();
-            var seen = new HashSet<IntVec3>();
-            foreach (ABNetwork network in ABColumnNetworks.All)
-            {
-                if (network.carrier == null)
-                    continue;
-
-                seen.Clear();
-                foreach (Thing carrier in map.listerThings.ThingsOfDef(network.carrier))
-                    if (carrier.Spawned && !seen.Add(carrier.Position))
-                        duplicates.Add(carrier);
-            }
-
-            foreach (Thing duplicate in duplicates)
-            {
-                Thing previous = duplicateBeingRemoved;
-                duplicateBeingRemoved = duplicate;
-                try
-                {
-                    duplicate.DeSpawn();
-                }
-                finally
-                {
-                    duplicateBeingRemoved = previous;
-                }
-            }
-
             var columns = new List<Building_ABColumn>();
             foreach (Thing thing in map.listerThings.AllThings)
                 if (thing is Building_ABColumn column)
@@ -538,6 +505,23 @@ namespace AsAboveSoBelow
                 sb.Append("AB2_ColumnNoAbove".Translate().ToString());
             }
             return sb.ToString();
+        }
+    }
+
+    [HarmonyPatch(typeof(GenSpawn), nameof(GenSpawn.SpawnBuildingAsPossible))]
+    internal static class Patch_GenSpawn_ABSkipDuplicateCarrier
+    {
+        private static bool Prefix(Building building, Map map, bool respawningAfterLoad)
+        {
+            if (!respawningAfterLoad || !ABColumnNetworks.IsCarrier(building.def)
+                || !building.Position.InBounds(map))
+                return true;
+
+            foreach (Thing occupant in building.Position.GetThingList(map))
+                if (occupant.def == building.def && occupant.Spawned)
+                    return false;
+
+            return true;
         }
     }
 
