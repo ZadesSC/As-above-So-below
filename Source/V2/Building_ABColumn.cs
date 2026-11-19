@@ -1,5 +1,7 @@
+using System;
 using System.Collections.Generic;
 using System.Text;
+using HarmonyLib;
 using RimWorld;
 using UnityEngine;
 using Verse;
@@ -521,4 +523,27 @@ namespace AsAboveSoBelow
             return sb.ToString();
         }
     }
+
+    [HarmonyPatch(typeof(MapComponentUtility), nameof(MapComponentUtility.FinalizeInit))]
+    internal static class Patch_MapComponentUtility_ABRestoreCarriers
+    {
+        private static void Prefix(Map map)
+        {
+            ABBandMap bands = map.GetComponent<ABBandMap>();
+            if (bands == null)
+                return;
+
+            // Loaded things have spawned, but pipe hosts have yet to rebuild.
+            ABBands.RebindAfterLoad(map, bands);
+            try
+            {
+                Building_ABColumn.RestoreCarriers(map);
+            }
+            catch (Exception exception)
+            {
+                Log.Error(ABLog.Tag + " Could not restore utility column carriers: " + exception);
+            }
+        }
+    }
+
 }
