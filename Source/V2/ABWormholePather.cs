@@ -916,13 +916,23 @@ namespace AsAboveSoBelow
 
             CellRect footprint = far.OccupiedRect();
             TraverseParms traverse = TraverseParms.For(pawn, Danger.Deadly, TraverseMode.ByPawn);
-            bool Walkable(IntVec3 cell) => cell.InBounds(map) && cell.Walkable(map)
-                && ABBands.SameBand(map, cell, far.Position);
-            bool Reachable(IntVec3 from, IntVec3 to) => Walkable(from) && Walkable(to)
-                && map.reachability.CanReach(from, to, PathEndMode.OnCell, traverse);
+            bool forbidAware = ABBandComponents.RespectsForbiddenDoors(pawn);
+            int Component(IntVec3 cell) => ABBandComponents.ComponentOf(map, cell, forbidAware);
 
-            IntVec3 exit = Walkable(approach.outside) ? approach.outside : IntVec3.Invalid;
-            if (!exit.IsValid && Walkable(approach.mouth))
+            bool Reachable(IntVec3 from, IntVec3 to)
+            {
+                // Synthetic stair links and diagonal corners can make region reachability
+                // optimistic. Landing must be connected by walkable cells on this floor.
+                int component = Component(from);
+                return component >= 0 && component == Component(to)
+                    && map.reachability.CanReach(from, to, PathEndMode.OnCell, traverse);
+            }
+
+            bool UsableExit(IntVec3 cell) => !footprint.Contains(cell)
+                && Reachable(approach.mouth, cell) && cell.Standable(map);
+
+            IntVec3 exit = UsableExit(approach.outside) ? approach.outside : IntVec3.Invalid;
+            if (!exit.IsValid)
             {
                 // A corner ladder may open into the room along another edge of its footprint.
                 IntVec3 side = new IntVec3(approach.outward.z, 0, approach.outward.x);
@@ -930,9 +940,9 @@ namespace AsAboveSoBelow
                 {
                     IntVec3 right = approach.outside + side * distance;
                     IntVec3 left = approach.outside - side * distance;
-                    if (Reachable(approach.mouth, right) && right.Standable(map))
+                    if (UsableExit(right))
                         exit = right;
-                    else if (Reachable(approach.mouth, left) && left.Standable(map))
+                    else if (UsableExit(left))
                         exit = left;
                 }
 
@@ -943,8 +953,7 @@ namespace AsAboveSoBelow
                     foreach (IntVec3 direction in GenAdj.CardinalDirections)
                     {
                         IntVec3 edge = cell + direction;
-                        if (!footprint.Contains(edge) && Reachable(approach.mouth, edge)
-                            && edge.Standable(map))
+                        if (UsableExit(edge))
                         {
                             exit = edge;
                             break;
@@ -955,11 +964,12 @@ namespace AsAboveSoBelow
 
             if (!exit.IsValid)
                 return IntVec3.Invalid;
-            if (Reachable(exit, landing))
+            bool CanLand(IntVec3 cell) => Reachable(exit, cell)
+                && (footprint.Contains(cell) || cell.Standable(map));
+            if (CanLand(landing))
                 return landing;
 
-            bool FreeReachable(IntVec3 cell) => Reachable(exit, cell)
-                && (footprint.Contains(cell) || cell.Standable(map)) && cell.GetFirstPawn(map) == null;
+            bool FreeReachable(IntVec3 cell) => CanLand(cell) && cell.GetFirstPawn(map) == null;
 
             if (FreeReachable(exit))
                 return exit;
