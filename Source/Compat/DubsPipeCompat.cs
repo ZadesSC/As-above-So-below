@@ -272,7 +272,10 @@ namespace AsAboveSoBelow
                     return;
                 }
 
-                if (family.gridLayers.TryGetValue(P, out string layer))
+                family.gridLayers.TryGetValue(P, out string layer);
+                // Rimatomics dereferences a valve's last network during native despawn.
+                // Its closed valves are excluded from joins but keep that reference.
+                if (layer != null && family.name != "Rimatomics")
                 {
                     foreach (object pipe in (IEnumerable)family.cachedPipes.GetValue(__instance))
                         if (PipeMode(family, pipe) == P && (bool)family.closed.GetValue(pipe))
