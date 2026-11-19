@@ -343,7 +343,8 @@ namespace AsAboveSoBelow
                 return;
             }
             Map map = request.map;
-            if (map == null || !ABBands.Banded(map))
+            if (map == null || !ABBands.Banded(map)
+                || ABNativePortals.ShouldRoute(map, request.TraverseParms.pawn, request.Start, request.Target))
             {
                 return;
             }
@@ -417,10 +418,11 @@ namespace AsAboveSoBelow
         }
 
         private static bool Prefix(Map ___map, IntVec3 start, LocalTargetInfo target,
-            ref PawnPath __result)
+            TraverseParms traverseParms, ref PawnPath __result)
         {
             ABPerfStats.NoteRequest(___map, sync: true);
-            if (!ABPathBandScope.CrossBand(___map, start, target, out string why))
+            if (ABNativePortals.ShouldRoute(___map, traverseParms.pawn, start, target)
+                || !ABPathBandScope.CrossBand(___map, start, target, out string why))
             {
                 return true;
             }
@@ -453,7 +455,8 @@ namespace AsAboveSoBelow
                 return true;
             }
             ABPerfStats.NoteRequest(request.map, sync: false);
-            if (!ABPathBandScope.CrossBand(request.map, request.Start, request.Target, out string why))
+            if (ABNativePortals.ShouldRoute(request.map, request.TraverseParms.pawn, request.Start, request.Target)
+                || !ABPathBandScope.CrossBand(request.map, request.Start, request.Target, out string why))
             {
                 return true;
             }
