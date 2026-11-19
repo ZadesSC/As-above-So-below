@@ -199,6 +199,7 @@ namespace AsAboveSoBelow
             {
                 "DubsBadHygiene" => new[] { "Air", "Sewage", "Heating", "Water" },
                 "Rimefeller" => new[] { "Oil" },
+                "Rimatomics" => new[] { "ColdWater", "Cooling", "Steam", "HighVoltage", "Loom" },
                 _ => Array.Empty<string>()
             };
             if (layerNames.Length == 0)
