@@ -77,6 +77,12 @@ namespace AsAboveSoBelow
                 EnsureCarriers();
         }
 
+        [ThreadStatic]
+        private static Thing duplicateBeingRemoved;
+
+        internal static bool IsRemovingDuplicateCarrier(Thing thing) => thing != null
+            && ReferenceEquals(thing, duplicateBeingRemoved);
+
         internal static void RestoreCarriers(Map map)
         {
             // Saved carriers spawn independently of their columns. Restore missing
@@ -95,7 +101,18 @@ namespace AsAboveSoBelow
             }
 
             foreach (Thing duplicate in duplicates)
-                duplicate.DeSpawn();
+            {
+                Thing previous = duplicateBeingRemoved;
+                duplicateBeingRemoved = duplicate;
+                try
+                {
+                    duplicate.DeSpawn();
+                }
+                finally
+                {
+                    duplicateBeingRemoved = previous;
+                }
+            }
 
             var columns = new List<Building_ABColumn>();
             foreach (Thing thing in map.listerThings.AllThings)
