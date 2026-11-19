@@ -928,8 +928,11 @@ namespace AsAboveSoBelow
                     && map.reachability.CanReach(from, to, PathEndMode.OnCell, traverse);
             }
 
+            bool CanStandOutside(IntVec3 cell) => cell.Standable(map)
+                && cell.GetEdifice(map) is not Building_Door;
+
             bool UsableExit(IntVec3 cell) => !footprint.Contains(cell)
-                && Reachable(approach.mouth, cell) && cell.Standable(map);
+                && Reachable(approach.mouth, cell) && CanStandOutside(cell);
 
             IntVec3 exit = UsableExit(approach.outside) ? approach.outside : IntVec3.Invalid;
             if (!exit.IsValid)
@@ -945,27 +948,41 @@ namespace AsAboveSoBelow
                     else if (UsableExit(left))
                         exit = left;
                 }
+            }
 
+            if (!exit.IsValid)
+            {
+                // A doorway or sandbags can be the only way out. Follow reachable
+                // pass-through cells until there is room to stand clear of the footprint.
+                Queue<IntVec3> boundary = new Queue<IntVec3>();
+                HashSet<IntVec3> visited = new HashSet<IntVec3>();
                 foreach (IntVec3 cell in footprint)
-                {
-                    if (exit.IsValid)
-                        break;
                     foreach (IntVec3 direction in GenAdj.CardinalDirections)
+                        boundary.Enqueue(cell + direction);
+
+                while (boundary.Count > 0)
+                {
+                    IntVec3 cell = boundary.Dequeue();
+                    if (footprint.Contains(cell) || !visited.Add(cell) || !Reachable(approach.mouth, cell))
+                        continue;
+                    if (CanStandOutside(cell))
                     {
-                        IntVec3 edge = cell + direction;
-                        if (UsableExit(edge))
-                        {
-                            exit = edge;
-                            break;
-                        }
+                        exit = cell;
+                        break;
                     }
+
+                    if (cell.GetEdifice(map) is Building_Door door
+                        && (door.IsForbiddenToPass(pawn) || !(door.Open || door.PawnCanOpen(pawn))))
+                        continue;
+                    foreach (IntVec3 direction in GenAdj.CardinalDirections)
+                        boundary.Enqueue(cell + direction);
                 }
             }
 
             if (!exit.IsValid)
                 return IntVec3.Invalid;
             bool CanLand(IntVec3 cell) => Reachable(exit, cell)
-                && (footprint.Contains(cell) || cell.Standable(map));
+                && (footprint.Contains(cell) || CanStandOutside(cell));
             if (CanLand(landing))
                 return landing;
 
