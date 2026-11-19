@@ -717,6 +717,11 @@ namespace AsAboveSoBelow
                 CopyFields(n.template, c, c.GetType());
 
                 c.defName = CarrierDefName(n.id);
+                // Late carrier discovery runs after the game assigned template hashes.
+                // A clone must always have its own identity in the save dictionaries.
+                c.shortHash = 0;
+                if (n.template.shortHash != 0)
+                    AssignCarrierHash(c);
                 c.label = n.template.label;
                 c.description = n.template.description;
                 c.modContentPack = n.template.modContentPack;
@@ -824,6 +829,25 @@ namespace AsAboveSoBelow
                 sb.Append('X');
             }
             return sb.ToString();
+        }
+
+        private static void AssignCarrierHash(ThingDef carrier)
+        {
+            var occupied = new HashSet<ushort>();
+            foreach (ThingDef def in DefDatabase<ThingDef>.AllDefsListForReading)
+                occupied.Add(def.shortHash);
+
+            ushort hash = unchecked((ushort)(GenText.StableStringHash(carrier.defName) % ushort.MaxValue));
+            for (int attempts = 0; attempts < ushort.MaxValue; attempts++)
+            {
+                if (hash != 0 && !occupied.Contains(hash))
+                {
+                    carrier.shortHash = hash;
+                    return;
+                }
+                hash = unchecked((ushort)(hash + 1));
+            }
+            throw new InvalidOperationException("No short hash available for " + carrier.defName);
         }
 
         private static List<CompProperties> CloneComps(List<CompProperties> src)

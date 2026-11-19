@@ -1,5 +1,7 @@
+using System;
 using System.Collections.Generic;
 using System.Text;
+using HarmonyLib;
 using RimWorld;
 using UnityEngine;
 using Verse;
@@ -71,7 +73,20 @@ namespace AsAboveSoBelow
                 }
             }
             EnsureRoof();
-            EnsureCarriers();
+            if (!respawningAfterLoad)
+                EnsureCarriers();
+        }
+
+        internal static void RestoreCarriers(Map map)
+        {
+            // Saved carriers spawn independently of their columns. Restore missing
+            // carriers after both have loaded so spawn order cannot create duplicates.
+            var columns = new List<Building_ABColumn>();
+            foreach (Thing thing in map.listerThings.AllThings)
+                if (thing is Building_ABColumn column)
+                    columns.Add(column);
+            foreach (Building_ABColumn column in columns)
+                column.EnsureCarriers();
         }
 
         public override void DeSpawn(DestroyMode mode = DestroyMode.Vanish)
@@ -492,4 +507,44 @@ namespace AsAboveSoBelow
             return sb.ToString();
         }
     }
+
+    [HarmonyPatch(typeof(GenSpawn), nameof(GenSpawn.SpawnBuildingAsPossible))]
+    internal static class Patch_GenSpawn_ABSkipDuplicateCarrier
+    {
+        private static bool Prefix(Building building, Map map, bool respawningAfterLoad)
+        {
+            if (!respawningAfterLoad || !ABColumnNetworks.IsCarrier(building.def)
+                || !building.Position.InBounds(map))
+                return true;
+
+            foreach (Thing occupant in building.Position.GetThingList(map))
+                if (occupant.def == building.def && occupant.Spawned)
+                    return false;
+
+            return true;
+        }
+    }
+
+    [HarmonyPatch(typeof(MapComponentUtility), nameof(MapComponentUtility.FinalizeInit))]
+    internal static class Patch_MapComponentUtility_ABRestoreCarriers
+    {
+        private static void Prefix(Map map)
+        {
+            ABBandMap bands = map.GetComponent<ABBandMap>();
+            if (bands == null)
+                return;
+
+            // Loaded things have spawned, but pipe hosts have yet to rebuild.
+            ABBands.RebindAfterLoad(map, bands);
+            try
+            {
+                Building_ABColumn.RestoreCarriers(map);
+            }
+            catch (Exception exception)
+            {
+                Log.Error(ABLog.Tag + " Could not restore utility column carriers: " + exception);
+            }
+        }
+    }
+
 }
