@@ -198,6 +198,7 @@ namespace AsAboveSoBelow
             string[] layerNames = family.name switch
             {
                 "DubsBadHygiene" => new[] { "Air", "Sewage", "Heating", "Water" },
+                "Rimefeller" => new[] { "Oil" },
                 _ => Array.Empty<string>()
             };
             if (layerNames.Length == 0)
