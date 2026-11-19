@@ -1291,8 +1291,7 @@ namespace AsAboveSoBelow
             {
                 ABStairAnim.Clear(pawn);
                 ABTransitVisuals.Clear(pawn);
-                pawn.pather.StopDead();
-                pawn.pather.StartPath(t.realDest, t.realPeMode);
+                ABNativePortals.Replan(pawn, t.realDest, t.realPeMode);
                 return;
             }
             IntVec3 landing = LandingCell(pawn, t.far);

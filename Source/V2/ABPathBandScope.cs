@@ -344,7 +344,7 @@ namespace AsAboveSoBelow
             }
             Map map = request.map;
             if (map == null || !ABBands.Banded(map)
-                || ABNativePortals.ShouldRoute(map, request.TraverseParms.pawn, request.Start, request.Target))
+                || ABNativePortals.UsesNativeRouting(map))
             {
                 return;
             }

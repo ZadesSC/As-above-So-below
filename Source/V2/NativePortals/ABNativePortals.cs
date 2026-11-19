@@ -116,14 +116,14 @@ internal static class ABNativePortals
         return links;
     }
 
+    internal static bool UsesNativeRouting(Map map) =>
+        active && ABBands.CompOf(map)?.Banded == true && GraphFor(map).Count > 0;
+
     internal static bool ShouldRoute(Map map, Pawn pawn, IntVec3 start, LocalTargetInfo target)
     {
-        if (!active || pawn == null || map == null || !start.InBounds(map)
-            || !target.IsValid || !target.Cell.InBounds(map) || ABBands.CompOf(map)?.Banded != true
-            || ABBands.InGutter(map, start) || ABBands.InGutter(map, target.Cell))
-            return false;
-
-        if (GraphFor(map).Count == 0)
+        if (pawn == null || !UsesNativeRouting(map) || !start.InBounds(map)
+            || !target.IsValid || !target.Cell.InBounds(map) || ABBands.InGutter(map, start)
+            || ABBands.InGutter(map, target.Cell))
             return false;
 
         if (!ABBands.SameBand(map, start, target.Cell))
@@ -136,7 +136,17 @@ internal static class ABNativePortals
     internal static bool CanCross(Pawn pawn, Building_Door near, Building_Door far) =>
         pawn.Spawned && near.Spawned && far.Spawned && near.Map == pawn.Map && far.Map == pawn.Map
         && !near.IsForbiddenToPass(pawn) && !far.IsForbiddenToPass(pawn)
-        && (near.Open || near.PawnCanOpen(pawn)) && (far.Open || far.PawnCanOpen(pawn));
+        && near.CanPhysicallyPass(pawn) && far.CanPhysicallyPass(pawn);
+
+    internal static void Replan(Pawn pawn, LocalTargetInfo destination, PathEndMode endMode)
+    {
+        pawn.pather.StopDead();
+        if (destination.IsValid && (!destination.HasThing
+            || (!destination.ThingDestroyed && destination.Thing.Spawned && destination.Thing.Map == pawn.Map)))
+            pawn.pather.StartPath(destination, endMode);
+        else if (pawn.CurJob != null)
+            pawn.jobs.EndCurrentJob(JobCondition.Incompletable, false);
+    }
 
     private static void Prepare(ref PathFinderJob job, PathRequest request)
     {
@@ -247,6 +257,14 @@ internal static class ABNativePortals
             || !ABBands.Banded(___pawn.Map) || ABBands.SameBand(___pawn.Map, at, next))
             return true;
 
+        // StartPath can leave the previous path moving while its replacement is queued.
+        // Stop consuming the old path here, and let the normal pather claim the new one.
+        if (__instance.curPathRequest != null)
+        {
+            __instance.DisposeAndClearCurPath();
+            return false;
+        }
+
         LocalTargetInfo destination = __instance.Destination;
         foreach (Link link in GraphFor(___pawn.Map))
         {
@@ -259,8 +277,7 @@ internal static class ABNativePortals
         }
 
         // The path's permission snapshot may be stale by the time the pawn reaches it.
-        __instance.StopDead();
-        __instance.StartPath(destination, ___peMode);
+        Replan(___pawn, destination, ___peMode);
         return false;
     }
 }
