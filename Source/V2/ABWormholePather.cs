@@ -35,6 +35,7 @@ namespace AsAboveSoBelow
             public Building_Door near;
             public Building_Door far;
             public int expiresAtTick;
+            public bool nativePortal;
 
             /// <summary>§78c: the cell ON the link that the pawn is walking to, or Invalid
             /// when no usable one exists. Standing here means standing on the stair art,
@@ -268,6 +269,7 @@ namespace AsAboveSoBelow
             public PathEndMode realPeMode;
             public int fireAtTick;
             public IntVec3 holdCell;
+            public bool nativePortal;
 
             /// <summary>The job that owned the pather when the hold started. If it changes,
             /// something else has taken command and this teleport must not happen.</summary>
@@ -1101,6 +1103,20 @@ namespace AsAboveSoBelow
         /// or carry instantly, which is precisely what this method did before §78 and is
         /// still what happens whenever there is no clip to play.
         /// </summary>
+        internal static void CarryNative(Pawn pawn, Building_Door near, Building_Door far,
+            LocalTargetInfo destination, PathEndMode endMode)
+        {
+            Clear(pawn);
+            Carry(pawn, new Transit
+            {
+                near = near,
+                far = far,
+                realDest = destination,
+                realPeMode = endMode,
+                nativePortal = true
+            });
+        }
+
         private static void Carry(Pawn pawn, Transit t)
         {
             // Stop tracking: the pawn's NEXT arrival (at the real destination, just after
@@ -1173,6 +1189,7 @@ namespace AsAboveSoBelow
                 realPeMode = t.realPeMode,
                 fireAtTick = Find.TickManager.TicksGame + entryTicks,
                 holdCell = pawn.Position,
+                nativePortal = t.nativePortal,
                 job = pawn.CurJob
             };
             ABV2Debug.Transit("HOLDING " + pawn.LabelShort + " at " + pawn.Position
@@ -1248,7 +1265,8 @@ namespace AsAboveSoBelow
                         near = x.near,
                         far = x.far,
                         realDest = x.realDest,
-                        realPeMode = x.realPeMode
+                        realPeMode = x.realPeMode,
+                        nativePortal = x.nativePortal
                     });
                 }
                 catch (Exception e)
@@ -1269,6 +1287,13 @@ namespace AsAboveSoBelow
         /// straight from Carry (no clip) or from TickCrossings when the hold expires.</summary>
         private static void CarryNow(Pawn pawn, Transit t)
         {
+            if (t.nativePortal && !ABNativePortals.CanCross(pawn, t.near, t.far))
+            {
+                ABStairAnim.Clear(pawn);
+                ABTransitVisuals.Clear(pawn);
+                ABNativePortals.Replan(pawn, t.realDest, t.realPeMode);
+                return;
+            }
             IntVec3 landing = LandingCell(pawn, t.far);
             if (!landing.IsValid)
             {
@@ -1517,7 +1542,10 @@ namespace AsAboveSoBelow
         {
             try
             {
-                ABWormholePather.TrySegment(___pawn, ref dest, ref peMode);
+                if (ABNativePortals.ShouldRoute(___pawn?.Map, ___pawn, ___pawn?.Position ?? IntVec3.Invalid, dest))
+                    ABWormholePather.Clear(___pawn);
+                else
+                    ABWormholePather.TrySegment(___pawn, ref dest, ref peMode);
             }
             catch (Exception e)
             {

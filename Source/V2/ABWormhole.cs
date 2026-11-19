@@ -80,6 +80,14 @@ namespace AsAboveSoBelow
         /// explicit and cheap to audit).</summary>
         private static bool rearming;
 
+        internal static IEnumerable<KeyValuePair<Building_Door, Building_Door>> PortalPairs(Map map)
+        {
+            if (!byMap.TryGetValue(map, out List<Pair> pairs))
+                yield break;
+            foreach (Pair pair in pairs)
+                yield return new KeyValuePair<Building_Door, Building_Door>(pair.a, pair.b);
+        }
+
         public static int PairCount(Map map)
         {
             return map != null && byMap.TryGetValue(map, out List<Pair> l) ? l.Count : 0;
@@ -197,6 +205,7 @@ namespace AsAboveSoBelow
                 }
             }
             list.Add(new Pair { a = a, b = b });
+            ABNativePortals.Invalidate(a.Map);
             RearmAll(a.Map);
         }
 
@@ -216,6 +225,7 @@ namespace AsAboveSoBelow
                 TearDown(p);
                 list.RemoveAt(i);
             }
+            ABNativePortals.Invalidate(map);
             map.reachability.ClearCache();
         }
 
