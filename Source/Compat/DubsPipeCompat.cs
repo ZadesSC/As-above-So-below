@@ -465,8 +465,8 @@ namespace AsAboveSoBelow
             for (int i = 0; i < twc.AllComps.Count; i++)
             {
                 ThingComp pipe = twc.AllComps[i];
-                if (!fam.compPipe.IsInstanceOfType(pipe) || (layer >= 0
-                    && (PipeMode(fam, pipe) != layer || !ReferenceEquals(fam.pipeNetRef.GetValue(pipe), drop))))
+                if (!fam.compPipe.IsInstanceOfType(pipe) || !ReferenceEquals(fam.pipeNetRef.GetValue(pipe), drop)
+                    || (layer >= 0 && PipeMode(fam, pipe) != layer))
                     continue;
 
                 fam.pipeNetRef.SetValue(pipe, net);
