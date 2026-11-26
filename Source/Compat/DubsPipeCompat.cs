@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Reflection;
 using System.Text;
 using HarmonyLib;
+using RimWorld;
 using Verse;
 
 namespace AsAboveSoBelow
@@ -47,6 +48,10 @@ namespace AsAboveSoBelow
         /// for two of the three.</summary>
         private sealed class Family
         {
+            public readonly Dictionary<int, string> gridLayers = new Dictionary<int, string>();
+            public FieldInfo pipeGrid, cachedPipes, netId, netType, cells;
+            public PropertyInfo pipeMode, gridId, closed;
+            public MethodInfo rebuild, tickAir;
             public FieldInfo pipeNets;      // Net[] on the map component
             public Type compPipe;           // <Mod>.CompPipe
             public FieldInfo pipeNetRef;    // Net on CompPipe
@@ -165,7 +170,7 @@ namespace AsAboveSoBelow
                         + "resolve; cross-level pipes are disabled for it.");
                     continue;
                 }
-                families[mapComp] = new Family
+                Family family = new Family
                 {
                     pipeNets = nets, compPipe = comp, pipeNetRef = netRef,
                     pipedThings = things, initNet = init,
@@ -174,38 +179,114 @@ namespace AsAboveSoBelow
                     dirtyAll = AccessTools.Method(mapComp, "DirtyAllPipeGrids"),
                     regen = AccessTools.Method(mapComp, "RegenPipeGrids")
                 };
+                ConfigureGridLayers(mapComp, net, family);
+                family.rebuild = rebuild;
+                families[mapComp] = family;
                 found.Add(rebuild);
+                if (family.gridLayers.Count > 0)
+                {
+                    MethodInfo changed = AccessTools.Method(mapComp, "RebuildChangedNets", new[] { typeof(int) });
+                    if (changed != null)
+                        found.Add(changed);
+                }
             }
             return found;
         }
 
-        /// <summary>⚠ The parameter MUST be named `P` - Harmony binds by name, and
-        /// `RebuildPipeGrid(int P)` is what Dubwise called it.</summary>
-        private static void Postfix(object __instance, int P)
+        private static void ConfigureGridLayers(Type mapComp, Type net, Family family)
         {
-            if (__instance == null || !ABGuard.On(ABGuard.Utilities))
+            string[] layerNames = family.name switch
             {
+                "DubsBadHygiene" => new[] { "Air", "Sewage", "Heating", "Water" },
+                "Rimefeller" => new[] { "Oil" },
+                "Rimatomics" => new[] { "ColdWater", "Cooling", "Steam", "HighVoltage", "Loom" },
+                _ => Array.Empty<string>()
+            };
+            if (layerNames.Length == 0)
+                return;
+
+            family.pipeMode = AccessTools.Property(family.compPipe, "mode");
+            family.closed = AccessTools.Property(family.compPipe, "closed");
+            family.gridId = AccessTools.Property(family.compPipe, "GridID");
+            family.pipeGrid = AccessTools.Field(mapComp, "PipeGrid");
+            family.cachedPipes = AccessTools.Field(mapComp, "cachedPipes");
+            family.netId = AccessTools.Field(net, "NetID");
+            family.netType = AccessTools.Field(net, "NetType");
+            family.cells = AccessTools.Field(net, "cells");
+            if (family.pipeMode?.PropertyType.IsEnum != true || family.closed?.PropertyType != typeof(bool)
+                || family.gridId?.PropertyType != typeof(int) || family.gridId.GetSetMethod(true) == null
+                || family.pipeGrid?.FieldType != typeof(int[,]) || family.cachedPipes == null
+                || family.netId?.FieldType != typeof(int) || family.netType?.FieldType != typeof(int))
+            {
+                Log.Warning(ABLog.Tag + " Cannot resolve grid ownership for " + family.name);
                 return;
             }
+
+            foreach (string layer in layerNames)
+                if (Enum.IsDefined(family.pipeMode.PropertyType, layer))
+                    family.gridLayers.Add(Convert.ToInt32(Enum.Parse(family.pipeMode.PropertyType, layer)),
+                        family.prefix + layer);
+            if (family.name == "DubsBadHygiene")
+                family.tickAir = AccessTools.Method(net, "TickAircon", Type.EmptyTypes);
+        }
+
+        private static Family FamilyFor(object holder)
+        {
+            Family family = null;
+            for (Type type = holder?.GetType(); type != null && family == null; type = type.BaseType)
+                families.TryGetValue(type, out family);
+            return family;
+        }
+
+        private static bool Prefix(object __instance, MethodBase __originalMethod, int P)
+        {
+            if (__originalMethod.Name != "RebuildChangedNets" || !ABGuard.On(ABGuard.Utilities)
+                || !(__instance is MapComponent host) || !ABBands.Banded(host.map))
+                return true;
+
+            Family family = FamilyFor(__instance);
+            if (family == null || !family.gridLayers.ContainsKey(P))
+                return true;
+
+            // An incremental rebuild can leave the former cross-floor component
+            // partly registered. Rebuild the edited layer before reconnecting it.
+            family.rebuild.Invoke(__instance, new object[] { P });
+            return false;
+        }
+
+        private static void Postfix(object __instance, MethodBase __originalMethod, int P)
+        {
+            if (__originalMethod.Name != "RebuildPipeGrid" || !ABGuard.On(ABGuard.Utilities))
+                return;
             try
             {
-                Family fam = null;
-                for (Type t = __instance.GetType(); t != null && fam == null; t = t.BaseType)
-                {
-                    families.TryGetValue(t, out fam);
-                }
-                Map map = (__instance as MapComponent)?.map;
-                if (fam == null)
-                {
+                Family family = FamilyFor(__instance);
+                if (family == null)
                     return;
-                }
-                fam.rebuilds++;
+
+                family.rebuilds++;
+                Map map = (__instance as MapComponent)?.map;
                 if (map == null || !ABBands.Banded(map))
                 {
-                    fam.skip = "map null or unbanded";
+                    family.skip = "map null or unbanded";
                     return;
                 }
-                MergeFor(map, fam, __instance);
+
+                family.gridLayers.TryGetValue(P, out string layer);
+                // Rimatomics dereferences a valve's last network during native despawn.
+                // Its closed valves are excluded from joins but keep that reference.
+                if (layer != null && family.name != "Rimatomics")
+                {
+                    foreach (object pipe in (IEnumerable)family.cachedPipes.GetValue(__instance))
+                        if (PipeMode(family, pipe) == P && (bool)family.closed.GetValue(pipe))
+                            family.pipeNetRef.SetValue(pipe, null);
+                }
+
+                MergeFor(map, family, __instance, P);
+                if (layer == "DubsBadHygiene.Air" && family.tickAir != null)
+                    foreach (object network in (Array)family.pipeNets.GetValue(__instance))
+                        if ((int)family.netType.GetValue(network) == P)
+                            family.tickAir.Invoke(network, null);
             }
             catch (Exception e)
             {
@@ -213,9 +294,12 @@ namespace AsAboveSoBelow
             }
         }
 
+        private static int PipeMode(Family family, object pipe) =>
+            Convert.ToInt32(family.pipeMode.GetValue(pipe));
+
         private static readonly List<Thing> partners = new List<Thing>();
 
-        private static void MergeFor(Map map, Family fam, object holder)
+        private static void MergeFor(Map map, Family fam, object holder, int rebuiltLayer)
         {
             // Both ends of a link are the SAME carrier def now, so this walks every pair
             // twice - once from each end. Harmless: the second visit lands in Join's
@@ -230,6 +314,9 @@ namespace AsAboveSoBelow
                 {
                     continue;
                 }
+                bool gridAware = fam.gridLayers.ContainsValue(n.id);
+                if (gridAware && (!fam.gridLayers.TryGetValue(rebuiltLayer, out string id) || id != n.id))
+                    continue;
                 matched++;
                 List<Thing> here = map.listerThings.ThingsOfDef(n.carrier);
                 carriers += here.Count;
@@ -239,7 +326,7 @@ namespace AsAboveSoBelow
                     ABColumnLink.AppendPartners(here[j], partners);
                     for (int k = 0; k < partners.Count; k++)
                     {
-                        Join(fam, holder, here[j], partners[k]);
+                        Join(fam, holder, here[j], partners[k], gridAware ? rebuiltLayer : -1);
                     }
                 }
             }
@@ -266,11 +353,11 @@ namespace AsAboveSoBelow
         /// `UniversalPipeMapComp` base for Rimefeller and Rimatomics, so `GetComponent` on it
         /// could miss and the losing net was never removed from the array. The component that
         /// just rebuilt its own grid is sitting right there in `__instance`; use it.</summary>
-        private static void Join(Family fam, object holder, Thing anchor, Thing partner)
+        private static void Join(Family fam, object holder, Thing anchor, Thing partner, int layer)
         {
             fam.joins++;
-            object keep = NetOf(fam, anchor);
-            object drop = NetOf(fam, partner);
+            object keep = NetOf(fam, anchor, layer);
+            object drop = NetOf(fam, partner, layer);
             if (keep == null || drop == null)
             {
                 fam.skip = "net was null (keep=" + (keep != null) + " drop=" + (drop != null)
@@ -281,6 +368,13 @@ namespace AsAboveSoBelow
             {
                 fam.skip = "already the same net - nothing to merge";
                 return;
+            }
+            if (layer >= 0)
+            {
+                Array registered = (Array)fam.pipeNets.GetValue(holder);
+                if ((int)fam.netType.GetValue(keep) != layer || (int)fam.netType.GetValue(drop) != layer
+                    || Array.IndexOf(registered, keep) < 0 || Array.IndexOf(registered, drop) < 0)
+                    return;
             }
             object keepThings = fam.pipedThings.GetValue(keep);
             // ⚠ DO NOT CAST TO NON-GENERIC ICollection. `PipedThings` is a
@@ -307,10 +401,13 @@ namespace AsAboveSoBelow
             {
                 moving.Add(t);
             }
+            if (layer >= 0 && fam.cells?.GetValue(keep) is HashSet<IntVec3> keepCells
+                && fam.cells.GetValue(drop) is HashSet<IntVec3> dropCells)
+                keepCells.UnionWith(dropCells);
             for (int i = 0; i < moving.Count; i++)
             {
                 add.Invoke(keepThings, new[] { moving[i] });
-                RepointPipes(fam, moving[i], keep);
+                RepointPipes(fam, holder, moving[i], keep, drop, layer);
             }
             RemoveNet(fam, holder, drop);
             fam.initNet.Invoke(keep, null);
@@ -348,7 +445,7 @@ namespace AsAboveSoBelow
             return p != null ? (int)p.GetValue(collection) : -1;
         }
 
-        private static object NetOf(Family fam, Thing t)
+        private static object NetOf(Family fam, Thing t, int layer = -1)
         {
             if (!(t is ThingWithComps twc))
             {
@@ -356,15 +453,15 @@ namespace AsAboveSoBelow
             }
             for (int i = 0; i < twc.AllComps.Count; i++)
             {
-                if (fam.compPipe.IsInstanceOfType(twc.AllComps[i]))
-                {
-                    return fam.pipeNetRef.GetValue(twc.AllComps[i]);
-                }
+                ThingComp pipe = twc.AllComps[i];
+                if (fam.compPipe.IsInstanceOfType(pipe) && (layer < 0
+                    || (PipeMode(fam, pipe) == layer && !(bool)fam.closed.GetValue(pipe))))
+                    return fam.pipeNetRef.GetValue(pipe);
             }
             return null;
         }
 
-        private static void RepointPipes(Family fam, object thing, object net)
+        private static void RepointPipes(Family fam, object holder, object thing, object net, object drop, int layer)
         {
             if (!(thing is ThingWithComps twc))
             {
@@ -372,9 +469,25 @@ namespace AsAboveSoBelow
             }
             for (int i = 0; i < twc.AllComps.Count; i++)
             {
-                if (fam.compPipe.IsInstanceOfType(twc.AllComps[i]))
+                ThingComp pipe = twc.AllComps[i];
+                if (!fam.compPipe.IsInstanceOfType(pipe) || !ReferenceEquals(fam.pipeNetRef.GetValue(pipe), drop)
+                    || (layer >= 0 && PipeMode(fam, pipe) != layer))
+                    continue;
+
+                fam.pipeNetRef.SetValue(pipe, net);
+                if (layer >= 0)
                 {
-                    fam.pipeNetRef.SetValue(twc.AllComps[i], net);
+                    int keepId = (int)fam.netId.GetValue(net);
+                    int dropId = (int)fam.netId.GetValue(drop);
+                    fam.gridId.SetValue(pipe, keepId);
+                    int[,] grid = (int[,])fam.pipeGrid.GetValue(holder);
+                    Map map = ((MapComponent)holder).map;
+                    foreach (IntVec3 cell in twc.OccupiedRect())
+                    {
+                        int index = map.cellIndices.CellToIndex(cell);
+                        if (grid[layer, index] == dropId)
+                            grid[layer, index] = keepId;
+                    }
                 }
             }
         }

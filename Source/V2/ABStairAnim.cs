@@ -79,6 +79,17 @@ namespace AsAboveSoBelow
         // as fast as it did on screen. If the motion now reads hurried rather than the
         // crossing reading long, DOUBLE these - that is the other defensible reading of the
         // same approval, and it costs 2.67s per staircase.
+        internal static bool TryPortalDelay(Building_Door link, out int ticks)
+        {
+            ticks = link.def.defName switch
+            {
+                "AB2_LadderUp" or "AB2_LadderDown" => LadderEntry,
+                "AB2_StairsUp" or "AB2_StairsDown" => StairsEntry,
+                _ => 0
+            };
+            return ticks > 0;
+        }
+
         private const int StairsEntry = 90;
         private const int GrandEntry = 90;
         private const int LadderEntry = 110;

@@ -894,24 +894,24 @@ namespace AsAboveSoBelow
 
         private static void GiveCarrierShortHash(ThingDef c)
         {
+            // Late-discovered carriers also need to avoid hashes assigned since the
+            // implied-def scan. Keep reservations for carriers generated in this scan.
             if (takenShortHashes == null)
-            {
                 takenShortHashes = new HashSet<ushort>();
-                List<ThingDef> allDefsListForReading = DefDatabase<ThingDef>.AllDefsListForReading;
-                for (int i = 0; i < allDefsListForReading.Count; i++)
-                {
-                    takenShortHashes.Add(allDefsListForReading[i].shortHash);
-                }
-            }
+            foreach (ThingDef existing in DefDatabase<ThingDef>.AllDefsListForReading)
+                takenShortHashes.Add(existing.shortHash);
 
-            ushort num = (ushort)(GenText.StableStringHash(c.defName) % 65535);
-            while (num == 0 || takenShortHashes.Contains(num))
+            ushort hash = unchecked((ushort)(GenText.StableStringHash(c.defName) % ushort.MaxValue));
+            for (int attempts = 0; attempts <= ushort.MaxValue; attempts++)
             {
-                num++;
+                if (hash != 0 && takenShortHashes.Add(hash))
+                {
+                    c.shortHash = hash;
+                    return;
+                }
+                hash = unchecked((ushort)(hash + 1));
             }
-
-            c.shortHash = num;
-            takenShortHashes.Add(num);
+            throw new InvalidOperationException("No short hash available for " + c.defName);
         }
 
         internal static IEnumerable<ThingDef> AllCarrierDefs => carrierDefs;

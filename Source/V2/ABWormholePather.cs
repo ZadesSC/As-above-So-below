@@ -37,6 +37,7 @@ namespace AsAboveSoBelow
             public Building_Door near;
             public Building_Door far;
             public int expiresAtTick;
+            public bool nativePortal;
 
             /// <summary>§78c: the cell ON the link that the pawn is walking to, or Invalid
             /// when no usable one exists. Standing here means standing on the stair art,
@@ -281,6 +282,7 @@ namespace AsAboveSoBelow
             public PathEndMode realPeMode;
             public int fireAtTick;
             public IntVec3 holdCell;
+            public bool nativePortal;
 
             /// <summary>The job that owned the pather when the hold started. If it changes,
             /// something else has taken command and this teleport must not happen.</summary>
@@ -787,7 +789,7 @@ namespace AsAboveSoBelow
         /// anchor-then-anywhere behaviour, which is the crowd case and wants a body-shaped
         /// answer more than a pretty one.
         /// </summary>
-        private static IntVec3 LandingCell(Pawn pawn, Building_Door far)
+        private static IntVec3 PickLandingCell(Building_Door far)
         {
             IntVec3 anchor = far.Position;
             Map map = far.Map;
@@ -820,6 +822,124 @@ namespace AsAboveSoBelow
                 return spot;
             }
             return anchor;
+        }
+
+        private static IntVec3 LandingCell(Pawn pawn, Building_Door far)
+        {
+            IntVec3 landing = PickLandingCell(far);
+            Map map = far.Map;
+            if (map == null || far.def.defName is not ("AB2_LadderUp" or "AB2_LadderDown"
+                or "AB2_StairsUp" or "AB2_StairsDown")
+                || !ABLinkApproach.TryGet(far, out ABApproach approach))
+            {
+                return landing;
+            }
+
+            CellRect footprint = far.OccupiedRect();
+            TraverseParms traverse = TraverseParms.For(pawn, Danger.Deadly, TraverseMode.ByPawn);
+            bool forbidAware = ABBandComponents.RespectsForbiddenDoors(pawn);
+            int Component(IntVec3 cell) => ABBandComponents.ComponentOf(map, cell, forbidAware);
+
+            bool Reachable(IntVec3 from, IntVec3 to)
+            {
+                // Synthetic stair links and diagonal corners can make region reachability
+                // optimistic. Landing must be connected by walkable cells on this floor.
+                int component = Component(from);
+                return component >= 0 && component == Component(to)
+                    && map.reachability.CanReach(from, to, PathEndMode.OnCell, traverse);
+            }
+
+            bool CanStandOutside(IntVec3 cell) => cell.Standable(map)
+                && cell.GetEdifice(map) is not Building_Door;
+
+            bool UsableExit(IntVec3 cell) => !footprint.Contains(cell)
+                && Reachable(approach.mouth, cell) && CanStandOutside(cell);
+
+            IntVec3 exit = UsableExit(approach.outside) ? approach.outside : IntVec3.Invalid;
+            if (!exit.IsValid)
+            {
+                // A corner ladder may open into the room along another edge of its footprint.
+                IntVec3 side = new IntVec3(approach.outward.z, 0, approach.outward.x);
+                for (int distance = 1; distance <= LandingRadius && !exit.IsValid; distance++)
+                {
+                    IntVec3 right = approach.outside + side * distance;
+                    IntVec3 left = approach.outside - side * distance;
+                    if (UsableExit(right))
+                        exit = right;
+                    else if (UsableExit(left))
+                        exit = left;
+                }
+            }
+
+            if (!exit.IsValid)
+            {
+                // A doorway or sandbags can be the only way out. Follow reachable
+                // pass-through cells until there is room to stand clear of the footprint.
+                Queue<IntVec3> boundary = new Queue<IntVec3>();
+                HashSet<IntVec3> visited = new HashSet<IntVec3>();
+                foreach (IntVec3 cell in footprint)
+                    foreach (IntVec3 direction in GenAdj.CardinalDirections)
+                        boundary.Enqueue(cell + direction);
+
+                while (boundary.Count > 0)
+                {
+                    IntVec3 cell = boundary.Dequeue();
+                    if (footprint.Contains(cell) || !visited.Add(cell) || !Reachable(approach.mouth, cell))
+                        continue;
+                    if (CanStandOutside(cell))
+                    {
+                        exit = cell;
+                        break;
+                    }
+
+                    if (cell.GetEdifice(map) is Building_Door door
+                        && (door.IsForbiddenToPass(pawn) || !(door.Open || door.PawnCanOpen(pawn))))
+                        continue;
+                    foreach (IntVec3 direction in GenAdj.CardinalDirections)
+                        boundary.Enqueue(cell + direction);
+                }
+            }
+
+            if (!exit.IsValid)
+                return IntVec3.Invalid;
+            bool CanLand(IntVec3 cell) => Reachable(exit, cell)
+                && (footprint.Contains(cell) || CanStandOutside(cell));
+            if (CanLand(landing))
+                return landing;
+
+            bool FreeReachable(IntVec3 cell) => CanLand(cell) && cell.GetFirstPawn(map) == null;
+
+            if (FreeReachable(exit))
+                return exit;
+            if (FreeReachable(approach.mouth))
+                return approach.mouth;
+            if (FreeReachable(far.Position))
+                return far.Position;
+
+            for (int distance = 1; distance <= LandingRadius; distance++)
+            {
+                for (int x = -distance; x <= distance; x++)
+                {
+                    for (int z = -distance; z <= distance; z++)
+                    {
+                        IntVec3 cell = far.Position + new IntVec3(x, 0, z);
+                        if (Math.Max(Math.Abs(x), Math.Abs(z)) == distance && FreeReachable(cell))
+                            return cell;
+                    }
+                }
+            }
+
+            // A crowded exit may temporarily share the mouth.
+            return Reachable(exit, approach.mouth) ? approach.mouth : exit;
+        }
+
+        private static void CancelBlockedLanding(Pawn pawn)
+        {
+            Clear(pawn);
+            ABStairAnim.Clear(pawn);
+            ABTransitVisuals.Clear(pawn);
+            pawn.pather?.StopDead();
+            pawn.jobs?.EndCurrentJob(JobCondition.Incompletable, false);
         }
 
         /// <summary>Scratch for ApproachLanding. Never held across a call.</summary>
@@ -897,6 +1017,37 @@ namespace AsAboveSoBelow
             return found;
         }
 
+#if RIMWORLD_17
+        internal static void CancelSupersededNativeCrossing(Pawn pawn, LocalTargetInfo destination, PathEndMode endMode)
+        {
+            if (pawn == null || !holding.TryGetValue(pawn.thingIDNumber, out Crossing crossing)
+                || !crossing.nativePortal)
+                return;
+
+            if (crossing.job == pawn.CurJob && crossing.realDest == destination && crossing.realPeMode == endMode)
+                return;
+
+            holding.Remove(pawn.thingIDNumber);
+            ABStairAnim.Clear(pawn);
+            ABTransitVisuals.Clear(pawn);
+        }
+
+        internal static void CarryNative(Pawn pawn, Building_Door near, Building_Door far,
+            LocalTargetInfo destination, PathEndMode endMode)
+        {
+            Clear(pawn);
+            Carry(pawn, new Transit
+            {
+                near = near,
+                far = far,
+                realDest = destination,
+                realPeMode = endMode,
+                nativePortal = true
+            });
+        }
+
+#endif
+
         /// <summary>
         /// Either start the §78 hold - the pawn stays where it is and plays the entry clip -
         /// or carry instantly, which is precisely what this method did before §78 and is
@@ -942,9 +1093,8 @@ namespace AsAboveSoBelow
         /// That IS the difference: #297 deferred the DECISION, this defers the MOVE.
         ///
         /// ⚠ THE STAGGER IS BELT TO STOPDEAD'S BRACES, and it is aspirational per pawn
-        /// (StaggerDurationFactor, Anomaly awoken corpses). If a pawn shrugs it off and
-        /// steps away, TickCrossings sees the cell change and fires the teleport early - a
-        /// shorter show, never a desync.
+        /// (StaggerDurationFactor, Anomaly awoken corpses). If a pawn steps away,
+        /// TickCrossings replans a native route and advances a legacy crossing early.
         /// </summary>
         private static bool BeginCrossing(Pawn pawn, Transit t)
         {
@@ -964,6 +1114,11 @@ namespace AsAboveSoBelow
                 value.job = pawn.CurJob;
                 value.realDest = t.realDest;
                 value.realPeMode = t.realPeMode;
+#if RIMWORLD_17
+                value.nativePortal = t.nativePortal;
+                if (t.nativePortal)
+                    pawn.pather?.StopDead();
+#endif
                 holding[pawn.thingIDNumber] = value;
                 return true;
             }
@@ -984,6 +1139,7 @@ namespace AsAboveSoBelow
                 realPeMode = t.realPeMode,
                 fireAtTick = Find.TickManager.TicksGame + entryTicks,
                 holdCell = pawn.Position,
+                nativePortal = t.nativePortal,
                 job = pawn.CurJob
             };
             ABV2Debug.Transit("HOLDING " + pawn.LabelShort + " at " + pawn.Position.ToString() + " for " + entryTicks + "t (entry clip) before " + t.far.Position.ToString());
@@ -1049,12 +1205,29 @@ namespace AsAboveSoBelow
             {
                 try
                 {
+#if RIMWORLD_17
+                    Pawn pawn = crossing.pawn;
+                    if (crossing.nativePortal)
+                    {
+                        if (!pawn.Spawned || pawn.Dead || pawn.CurJob != crossing.job)
+                            continue;
+
+                        if (pawn.Position != crossing.holdCell)
+                        {
+                            ABStairAnim.Clear(pawn);
+                            ABTransitVisuals.Clear(pawn);
+                            ABNativePortals.Replan(pawn, crossing.realDest, crossing.realPeMode);
+                            continue;
+                        }
+                    }
+#endif
                     CarryNow(crossing.pawn, new Transit
                     {
                         near = crossing.near,
                         far = crossing.far,
                         realDest = crossing.realDest,
                         realPeMode = crossing.realPeMode,
+                        nativePortal = crossing.nativePortal,
                     });
                 }
                 catch (Exception error)
@@ -1073,7 +1246,21 @@ namespace AsAboveSoBelow
         /// straight from Carry (no clip) or from TickCrossings when the hold expires.</summary>
         private static void CarryNow(Pawn pawn, Transit t)
         {
+#if RIMWORLD_17
+            if (t.nativePortal && !ABNativePortals.CanCarry(pawn, t.near, t.far))
+            {
+                ABStairAnim.Clear(pawn);
+                ABTransitVisuals.Clear(pawn);
+                ABNativePortals.Replan(pawn, t.realDest, t.realPeMode);
+                return;
+            }
+#endif
             IntVec3 landing = LandingCell(pawn, t.far);
+            if (!landing.IsValid)
+            {
+                CancelBlockedLanding(pawn);
+                return;
+            }
             ABV2Debug.Transit("TRANSITED " + pawn.LabelShort + " " + t.near.Position
                 + " -> " + landing + " (anchor " + t.far.Position + ")"
                 + "; resuming to " + t.realDest.Cell);
@@ -1418,18 +1605,42 @@ namespace AsAboveSoBelow
                 for (int j = 0; j < value.Count; j++)
                 {
                     TransitRecord transitRecord = value[j];
-                    if (transitRecord?.pawn == null || !transitRecord.pawn.Spawned || transitRecord.pawn.Map != key || transitRecord.near == null || transitRecord.far == null || !transitRecord.near.Spawned || !transitRecord.far.Spawned || !transitRecord.realDest.IsValid)
-                    {
+                    if (transitRecord?.pawn == null || !transitRecord.pawn.Spawned
+                        || transitRecord.pawn.Map != key || !transitRecord.realDest.IsValid)
                         continue;
-                    }
 
                     Pawn_PathFollower pather = transitRecord.pawn.pather;
                     Job curJob = transitRecord.pawn.CurJob;
+#if RIMWORLD_17
+                    if (transitRecord.resumeJobId >= 0)
+                    {
+                        // An animated native crossing stops its pather. Resume the saved
+                        // order through vanilla so the loaded grid and permissions decide.
+                        if (pather != null && !pather.Moving && curJob?.loadID == transitRecord.resumeJobId)
+                        {
+                            ABNativePortals.Replan(transitRecord.pawn, transitRecord.realDest, transitRecord.realPeMode);
+                            num++;
+                        }
+                        continue;
+                    }
+#endif
+                    if (transitRecord.near == null || transitRecord.far == null
+                        || !transitRecord.near.Spawned || !transitRecord.far.Spawned)
+                        continue;
+
                     if (pather != null && pather.Moving && curJob != null && pather.Destination.IsValid)
                     {
                         IntVec3 cell = pather.Destination.Cell;
                         if (cell == transitRecord.entryCell || cell == transitRecord.approachCell || transitRecord.near.OccupiedRect().Contains(cell))
                         {
+#if RIMWORLD_17
+                            if (ABNativePortals.UsesNativeRouting(key))
+                            {
+                                if (TryRestoreNativeLeg(key, transitRecord, pather.Destination))
+                                    num++;
+                                continue;
+                            }
+#endif
                             pending[transitRecord.pawn.thingIDNumber] = new Transit
                             {
                                 realDest = transitRecord.realDest,
@@ -1464,6 +1675,87 @@ namespace AsAboveSoBelow
             }
         }
 
+#if RIMWORLD_17
+        private static readonly FieldInfo DriverToils = AccessTools.Field(typeof(JobDriver), "toils");
+
+        private static bool TryRestoreNativeLeg(Map map, TransitRecord record, LocalTargetInfo leg)
+        {
+            Pawn pawn = record.pawn;
+            Job job = pawn.CurJob;
+            JobDriver driver = pawn.jobs.curDriver;
+            int remaining = record.expiresAtTick - Find.TickManager.TicksGame;
+            if (record.near.Map != map || record.far.Map != map
+                || remaining <= 0 || remaining > TransitTimeoutTicks
+                || (leg.HasThing && leg.Thing != record.near)
+                || !ABBands.SameBand(map, pawn.Position, record.near.Position)
+                || driver?.job != job || WantsNextToil(driver)
+                || job.startTick > record.startedTick)
+                return false;
+
+            LocalTargetInfo destination = record.realDest;
+            // Without a job ID, corroborate the saved order with the current job. A
+            // construction toil chooses an adjacent cell, which is absent from its job targets.
+            if (TryGetBuildTarget(driver, out TargetIndex index))
+            {
+                LocalTargetInfo target = job.GetTarget(index);
+                Thing thing = target.Thing;
+                if (thing == null || !thing.Spawned || thing.Map != map
+                    || record.realPeMode != PathEndMode.OnCell
+                    || (destination != target && (destination.HasThing
+                        || !IsBuildWorkCell(thing, destination.Cell))))
+                    return false;
+
+                // Use the same destination choice as vanilla GotoBuild on the loaded map.
+                destination = RCellFinder.TryFindGoodAdjacentSpotToTouch(pawn, thing, out IntVec3 workCell)
+                    ? (LocalTargetInfo)workCell
+                    : target;
+            }
+            else if (destination != job.targetA && destination != job.targetB && destination != job.targetC)
+            {
+                return false;
+            }
+
+            ABNativePortals.Replan(pawn, destination, record.realPeMode);
+            return true;
+        }
+
+        private static bool IsBuildWorkCell(Thing thing, IntVec3 cell)
+        {
+            foreach (IntVec3 adjacent in GenAdj.CellsAdjacent8Way(thing))
+            {
+                if (adjacent == cell)
+                    return true;
+            }
+            return false;
+        }
+
+        private static bool TryGetBuildTarget(JobDriver driver, out TargetIndex index)
+        {
+            index = TargetIndex.None;
+            int current = driver.CurToilIndex;
+            if (!(DriverToils?.GetValue(driver) is List<Toil> toils) || current < 0 || current >= toils.Count)
+                return false;
+
+            Toil toil = toils[current];
+            Action init = toil.initAction;
+            // Read the selected index from the stock closure. Other computed-cell toils
+            // need their own target validation. Running arbitrary init actions can change job state.
+            if (toil.defaultCompleteMode != ToilCompleteMode.PatherArrival || init == null
+                || init.GetInvocationList().Length != 1
+                || init.Method.DeclaringType?.DeclaringType != typeof(Toils_Goto)
+                || !init.Method.Name.StartsWith("<GotoBuild>", StringComparison.Ordinal))
+                return false;
+
+            if (AccessTools.Field(init.Method.DeclaringType, "ind")?.GetValue(init.Target) is TargetIndex target
+                && (target == TargetIndex.A || target == TargetIndex.B || target == TargetIndex.C))
+            {
+                index = target;
+                return true;
+            }
+            return false;
+        }
+#endif
+
         public static void QueueRestore(Map map, List<TransitRecord> records)
         {
             if (map == null)
@@ -1493,10 +1785,29 @@ namespace AsAboveSoBelow
         public static List<TransitRecord> CollectForSave(Map map)
         {
             List<TransitRecord> list = new List<TransitRecord>();
-            if (map == null || pending.Count == 0)
-            {
+            if (map == null)
                 return list;
+
+#if RIMWORLD_17
+            foreach (Crossing crossing in holding.Values)
+            {
+                Pawn pawn = crossing.pawn;
+                if (!crossing.nativePortal || pawn == null || !pawn.Spawned || pawn.Map != map
+                    || pawn.CurJob != crossing.job || crossing.job == null || crossing.job.loadID < 0
+                    || pawn.pather.Moving || !crossing.realDest.IsValid)
+                    continue;
+
+                list.Add(new TransitRecord
+                {
+                    pawn = pawn,
+                    realDest = crossing.realDest,
+                    realPeMode = crossing.realPeMode,
+                    resumeJobId = crossing.job.loadID
+                });
             }
+#endif
+            if (pending.Count == 0)
+                return list;
 
             IReadOnlyList<Pawn> allPawnsSpawned = map.mapPawns.AllPawnsSpawned;
             foreach (KeyValuePair<int, Transit> item in pending)
@@ -1566,6 +1877,9 @@ namespace AsAboveSoBelow
             public int startedTick;
             public int expiresAtTick;
             public int nearSinceTick;
+#if RIMWORLD_17
+            public int resumeJobId = -1;
+#endif
             public void ExposeData()
             {
                 Scribe_References.Look(ref pawn, "pawn");
@@ -1579,6 +1893,9 @@ namespace AsAboveSoBelow
                 Scribe_Values.Look(ref startedTick, "startedTick", 0);
                 Scribe_Values.Look(ref expiresAtTick, "expiresAtTick", 0);
                 Scribe_Values.Look(ref nearSinceTick, "nearSinceTick", 0);
+#if RIMWORLD_17
+                Scribe_Values.Look(ref resumeJobId, "resumeJobId", -1);
+#endif
             }
         }
 
@@ -1599,6 +1916,14 @@ namespace AsAboveSoBelow
         {
             try
             {
+#if RIMWORLD_17
+                ABWormholePather.CancelSupersededNativeCrossing(___pawn, dest, peMode);
+                if (ABNativePortals.UsesNativeRouting(___pawn?.Map))
+                {
+                    ABWormholePather.Clear(___pawn);
+                    return;
+                }
+#endif
                 ABWormholePather.lastOutcome = ABWormholePather.SegmentOutcome.NotOurs;
                 ABWormholePather.TrySegment(___pawn, ref dest, ref peMode);
                 ABWormholePather.NoteIfDoomed(___pawn, dest);
