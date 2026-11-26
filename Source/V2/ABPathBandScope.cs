@@ -197,32 +197,7 @@ namespace AsAboveSoBelow
         /// </summary>
         internal static bool CrossBand(Map map, IntVec3 start, LocalTargetInfo target, out string why)
         {
-            why = null;
-            if (map == null || !ABBands.Banded(map))
-            {
-                return false;
-            }
-            guardCalls++;
-            if (!target.IsValid)
-            {
-                return false;
-            }
-            IntVec3 dest = target.Cell;
-            if (!start.IsValid || !start.InBounds(map) || !dest.IsValid || !dest.InBounds(map))
-            {
-                return false;
-            }
-            if (ABBands.InGutter(map, start) || ABBands.InGutter(map, dest))
-            {
-                return false;
-            }
-            if (ABBands.SameBand(map, start, dest))
-            {
-                return false;
-            }
-            why = start + " band " + ABBands.BandOf(map, start)
-                + " -> " + dest + " band " + ABBands.BandOf(map, dest);
-            return true;
+            return CrossBand(map, start, target, PathEndMode.OnCell, null, out why);
         }
 
         // ---- per band door / pawn / provider buckets -------------------------
@@ -250,24 +225,23 @@ namespace AsAboveSoBelow
 
         private static List<IPathFindCostProvider>[] providersByBand;
 
-        private static void EnsureBuckets(Map map, IReadOnlyList<Thing> doors,
-            IReadOnlyList<Pawn> pawns, IReadOnlyList<IPathFindCostProvider> providers)
+        private static void EnsureBuckets(Map map, IReadOnlyList<Thing> doors, IReadOnlyList<Pawn> pawns, IReadOnlyList<IPathFindCostProvider> providers)
         {
-            int tick = Find.TickManager != null ? Find.TickManager.TicksGame : 0;
-            if (bucketMap == map && bucketTick == tick)
+            int num = ((Find.TickManager != null) ? Find.TickManager.TicksGame : 0);
+            if (bucketMap == map && bucketTick == num)
             {
                 return;
             }
-            bucketMap = map;
-            bucketTick = tick;
 
-            int bands = Mathf.Max(1, ABBands.BandCount(map));
-            if (doorsByBand == null || doorsByBand.Length != bands)
+            bucketMap = map;
+            bucketTick = num;
+            int num2 = Mathf.Max(1, ABBands.BandCount(map));
+            if (doorsByBand == null || doorsByBand.Length != num2)
             {
-                doorsByBand = new List<Thing>[bands];
-                pawnsByBand = new List<Pawn>[bands];
-                providersByBand = new List<IPathFindCostProvider>[bands];
-                for (int i = 0; i < bands; i++)
+                doorsByBand = new List<Thing>[num2];
+                pawnsByBand = new List<Pawn>[num2];
+                providersByBand = new List<IPathFindCostProvider>[num2];
+                for (int i = 0; i < num2; i++)
                 {
                     doorsByBand[i] = new List<Thing>();
                     pawnsByBand[i] = new List<Pawn>();
@@ -276,49 +250,64 @@ namespace AsAboveSoBelow
             }
             else
             {
-                for (int i = 0; i < bands; i++)
+                for (int j = 0; j < num2; j++)
                 {
-                    doorsByBand[i].Clear();
-                    pawnsByBand[i].Clear();
-                    providersByBand[i].Clear();
+                    doorsByBand[j].Clear();
+                    pawnsByBand[j].Clear();
+                    providersByBand[j].Clear();
                 }
             }
 
             if (doors != null)
             {
-                for (int i = 0; i < doors.Count; i++)
+                for (int k = 0; k < doors.Count; k++)
                 {
-                    Thing t = doors[i];
-                    int b = BandIndex(map, t?.Position ?? IntVec3.Invalid, bands);
-                    if (b >= 0)
+                    Thing thing = doors[k];
+                    IntVec3 intVec = thing?.Position ?? IntVec3.Invalid;
+                    if (intVec.IsValid && (ABBands.InGutter(map, intVec) || SpansSeam(map, thing)))
                     {
-                        doorsByBand[b].Add(t);
+                        for (int l = 0; l < num2; l++)
+                        {
+                            doorsByBand[l].Add(thing);
+                        }
+
+                        continue;
+                    }
+
+                    int num3 = BandIndex(map, intVec, num2);
+                    if (num3 >= 0)
+                    {
+                        doorsByBand[num3].Add(thing);
                     }
                 }
             }
+
             if (pawns != null)
             {
-                for (int i = 0; i < pawns.Count; i++)
+                for (int m = 0; m < pawns.Count; m++)
                 {
-                    Pawn p = pawns[i];
-                    int b = BandIndex(map, p?.Position ?? IntVec3.Invalid, bands);
-                    if (b >= 0)
+                    Pawn pawn = pawns[m];
+                    int num4 = BandIndex(map, pawn?.Position ?? IntVec3.Invalid, num2);
+                    if (num4 >= 0)
                     {
-                        pawnsByBand[b].Add(p);
+                        pawnsByBand[num4].Add(pawn);
                     }
                 }
             }
-            if (providers != null)
+
+            if (providers == null)
             {
-                for (int i = 0; i < providers.Count; i++)
+                return;
+            }
+
+            for (int n = 0; n < providers.Count; n++)
+            {
+                IPathFindCostProvider pathFindCostProvider = providers[n];
+                IntVec3 c = ((pathFindCostProvider is Thing thing2) ? thing2.Position : IntVec3.Invalid);
+                int num5 = BandIndex(map, c, num2);
+                if (num5 >= 0)
                 {
-                    IPathFindCostProvider p = providers[i];
-                    IntVec3 at = p is Thing t ? t.Position : IntVec3.Invalid;
-                    int b = BandIndex(map, at, bands);
-                    if (b >= 0)
-                    {
-                        providersByBand[b].Add(p);
-                    }
+                    providersByBand[num5].Add(pathFindCostProvider);
                 }
             }
         }
@@ -379,6 +368,112 @@ namespace AsAboveSoBelow
             providersKept += job.providers.Count;
             providersDropped += wasProviders - job.providers.Count;
         }
+        private static bool SpansSeam(Map map, Thing t)
+        {
+            if (t == null || (t.def.size.x <= 1 && t.def.size.z <= 1))
+            {
+                return false;
+            }
+
+            CellRect cellRect = t.OccupiedRect();
+            int num = -1;
+            foreach (IntVec3 item in cellRect)
+            {
+                if (item.InBounds(map))
+                {
+                    if (ABBands.InGutter(map, item))
+                    {
+                        return true;
+                    }
+
+                    int num2 = ABBands.BandOf(map, item);
+                    if (num < 0)
+                    {
+                        num = num2;
+                    }
+                    else if (num2 != num)
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        internal static bool CrossBand(Map map, IntVec3 start, LocalTargetInfo target, PathEndMode peMode, IntVec3? exactDestination, out string why)
+        {
+            why = null;
+            if (map == null || !ABBands.Banded(map))
+            {
+                return false;
+            }
+
+            guardCalls++;
+            if (!target.IsValid)
+            {
+                return false;
+            }
+
+            IntVec3 cell = target.Cell;
+            if (!start.IsValid || !start.InBounds(map) || !cell.IsValid || !cell.InBounds(map))
+            {
+                return false;
+            }
+
+            if (ABBands.InGutter(map, start) || ABBands.InGutter(map, cell))
+            {
+                return false;
+            }
+
+            if (ABBands.SameBand(map, start, cell))
+            {
+                return false;
+            }
+
+            if (exactDestination.HasValue && exactDestination.Value.IsValid && exactDestination.Value != cell && exactDestination.Value.InBounds(map) && (ABBands.InGutter(map, exactDestination.Value) || ABBands.SameBand(map, start, exactDestination.Value)))
+            {
+                return false;
+            }
+
+            if (target.HasThing && target.Thing != null && target.Thing.Spawned)
+            {
+                Thing thing = target.Thing;
+                if (peMode == PathEndMode.InteractionCell && thing.def.hasInteractionCell)
+                {
+                    IntVec3 interactionCell = thing.InteractionCell;
+                    if (interactionCell.InBounds(map) && (ABBands.InGutter(map, interactionCell) || ABBands.SameBand(map, start, interactionCell)))
+                    {
+                        return false;
+                    }
+                }
+
+                if ((peMode == PathEndMode.Touch || peMode == PathEndMode.ClosestTouch) && (thing.def.size.x > 1 || thing.def.size.z > 1))
+                {
+                    foreach (IntVec3 item in thing.OccupiedRect())
+                    {
+                        if (item.InBounds(map) && (ABBands.InGutter(map, item) || ABBands.SameBand(map, start, item)))
+                        {
+                            return false;
+                        }
+                    }
+                }
+            }
+
+            string[] array = new string[7];
+            IntVec3 intVec = start;
+            array[0] = intVec.ToString();
+            array[1] = " band ";
+            array[2] = ABBands.BandOf(map, start).ToString();
+            array[3] = " -> ";
+            intVec = cell;
+            array[4] = intVec.ToString();
+            array[5] = " band ";
+            array[6] = ABBands.BandOf(map, cell).ToString();
+            why = string.Concat(array);
+            return true;
+        }
+
     }
 
     // =====================================================================================
@@ -415,20 +510,20 @@ namespace AsAboveSoBelow
                 typeof(PathRequest.IPathGridCustomizer)
             });
         }
-
-        private static bool Prefix(Map ___map, IntVec3 start, LocalTargetInfo target,
-            ref PawnPath __result)
+        private static bool Prefix(Map ___map, IntVec3 start, LocalTargetInfo target, PathEndMode peMode, ref PawnPath __result)
         {
             ABPerfStats.NoteRequest(___map, sync: true);
-            if (!ABPathBandScope.CrossBand(___map, start, target, out string why))
+            if (!ABPathBandScope.CrossBand(___map, start, target, peMode, null, out var why))
             {
                 return true;
             }
+
             ABPathBandScope.rejectedSync++;
             ABPathBandScope.lastReject = "sync " + why;
             __result = PawnPath.NotFound;
             return false;
         }
+
     }
 
     /// <summary>
@@ -452,11 +547,21 @@ namespace AsAboveSoBelow
             {
                 return true;
             }
+
             ABPerfStats.NoteRequest(request.map, sync: false);
-            if (!ABPathBandScope.CrossBand(request.map, request.Start, request.Target, out string why))
+            if (ABWormholePather.ConsumeDoomedRequest(request.pawn))
+            {
+                ABPathBandScope.rejectedAsync++;
+                ABPathBandScope.lastReject = "async: no link route (marked by TrySegment)";
+                request.Resolve(null);
+                return false;
+            }
+
+            if (!ABPathBandScope.CrossBand(request.map, request.Start, request.Target, request.EndMode, request.ExactDestination, out var why))
             {
                 return true;
             }
+
             ABPathBandScope.rejectedAsync++;
             ABPathBandScope.lastReject = "async " + why;
             request.Resolve(null);
@@ -533,25 +638,21 @@ namespace AsAboveSoBelow
             {
                 return;
             }
+
             Map map = pawn.Map;
-            if (map == null || !ABBands.Banded(map))
+            if (map != null && ABBands.Banded(map))
             {
-                return;
+                float num = ABPathBandScope.HeuristicBoost();
+                if (ABWormholePather.AnyPending && ABWormholePather.HasPending(pawn))
+                {
+                    num = Mathf.Max(num, 1.35f);
+                }
+
+                if (!(num <= 1f))
+                {
+                    __result = Mathf.Max(__result, num);
+                }
             }
-            float boost = ABPathBandScope.HeuristicBoost();
-            // A leg of an in-flight segmented trip gets the floor even with the slider off.
-            // HasPending is a dictionary probe gated behind a plain count read, and a pending
-            // record exists for exactly the legs that belong to a cross-island journey:
-            // TrySegment creates it BEFORE the pather builds the leg's path.
-            if (ABWormholePather.AnyPending && ABWormholePather.HasPending(pawn))
-            {
-                boost = Mathf.Max(boost, ABPathBandScope.TransitLegHeuristic);
-            }
-            if (boost <= 1f)
-            {
-                return;
-            }
-            __result *= boost;
         }
     }
 }

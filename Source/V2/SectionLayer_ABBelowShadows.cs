@@ -42,25 +42,81 @@ namespace AsAboveSoBelow
                 {
                     return;
                 }
-                Map map = SectionRef(__instance)?.map;
+
+                Section section = SectionRef(__instance);
+                Map map = section?.map;
                 if (map == null || !ABBands.Banded(map))
                 {
                     return;
                 }
-                List<LayerSubMesh> subs = __instance.subMeshes;
-                for (int i = 0; i < subs.Count; i++)
+
+                bool flag = ABSpaceBackdrop.HasWorldBackdrop(map);
+                ABBandMap bands = (flag ? ABBands.CompOf(map) : null);
+                List<LayerSubMesh> subMeshes = __instance.subMeshes;
+                for (int i = 0; i < subMeshes.Count; i++)
                 {
-                    if (subs[i].material == MatBases.ShadowMask)
+                    LayerSubMesh layerSubMesh = subMeshes[i];
+                    if (!(layerSubMesh.material != MatBases.ShadowMask))
                     {
-                        subs[i].disabled = true;
+                        if (!flag || SpaceMaskMode == 2)
+                        {
+                            layerSubMesh.disabled = true;
+                        }
+                        else if (SpaceMaskMode == 1)
+                        {
+                            layerSubMesh.disabled = false;
+                        }
+                        else
+                        {
+                            RebuildVoidMask(map, bands, section, layerSubMesh);
+                        }
                     }
                 }
             }
-            catch (Exception e)
+            catch (Exception ex)
             {
-                Log.ErrorOnce(ABLog.Tag + " V2: shadow-unmask postfix threw: " + e, 762195874);
+                Log.ErrorOnce("[As above, So below] V2: shadow-unmask postfix threw: " + ex, 762195874);
             }
         }
+        private static void RebuildVoidMask(Map map, ABBandMap bands, Section section, LayerSubMesh sm)
+        {
+            sm.Clear(MeshParts.All);
+            sm.disabled = false;
+            float y = AltitudeLayer.Terrain.AltitudeFor();
+            foreach (IntVec3 item in section.CellRect)
+            {
+                if (item.InBounds(map) && ABSpaceBackdrop.IsVoid(map, bands, item))
+                {
+                    int count = sm.verts.Count;
+                    sm.verts.Add(new Vector3(item.x, y, item.z));
+                    sm.verts.Add(new Vector3(item.x, y, item.z + 1));
+                    sm.verts.Add(new Vector3(item.x + 1, y, item.z + 1));
+                    sm.verts.Add(new Vector3(item.x + 1, y, item.z));
+                    sm.colors.Add(Color.white);
+                    sm.colors.Add(Color.white);
+                    sm.colors.Add(Color.white);
+                    sm.colors.Add(Color.white);
+                    sm.tris.Add(count);
+                    sm.tris.Add(count + 1);
+                    sm.tris.Add(count + 2);
+                    sm.tris.Add(count);
+                    sm.tris.Add(count + 2);
+                    sm.tris.Add(count + 3);
+                }
+            }
+
+            if (sm.verts.Count == 0)
+            {
+                sm.disabled = true;
+            }
+            else
+            {
+                sm.FinalizeMesh(MeshParts.All);
+            }
+        }
+
+        internal static int SpaceMaskMode = 0;
+
     }
 
     /// <summary>

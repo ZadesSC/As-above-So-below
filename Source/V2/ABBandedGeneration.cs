@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -127,43 +128,45 @@ namespace AsAboveSoBelow
 
         private static bool TryInferredSurfaceRect(Map map, out CellRect surface, out int slot)
         {
-            surface = default(CellRect);
+            surface = default;
             slot = 0;
-            int bands = ABV2.BandCount;
-            bool logThis = !ReferenceEquals(inferLoggedFor, map);
-            if (logThis)
+            int num = ABMapSizeLimit.BandCountFor(map.Tile);
+            int num2 = ABMapSizeLimit.SurfaceBandFor(map.Tile);
+            bool flag = inferLoggedFor != map;
+            if (flag)
             {
                 inferLoggedFor = map;
             }
-            if (!ABV2.Enabled || bands <= 1)
+
+            if (!ABV2.Enabled || num <= 1)
             {
-                if (logThis)
+                if (flag)
                 {
-                    ABLog.Dev("V2: inferred layout DECLINED for " + map.Size
-                        + " - enabled=" + ABV2.Enabled + " bands=" + bands);
+                    ABLog.Dev("V2: inferred layout DECLINED for " + map.Size.ToString() + " - enabled=" + ABV2.Enabled + " bands=" + num);
                 }
+
                 return false;
             }
-            int bandHeight = map.Size.x;
-            int s = ABBandMap.SlotFor(bandHeight);
-            if (s <= 0 || bands * s != map.Size.z)
+
+            int x = map.Size.x;
+            int num3 = ABBandMap.SlotFor(x);
+            if (num3 <= 0 || num * num3 != map.Size.z)
             {
-                if (logThis)
+                if (flag)
                 {
-                    ABLog.Dev("V2: inferred layout DECLINED for " + map.Size
-                        + " - expected z=" + (bands * s) + " (bands=" + bands + " x slot=" + s
-                        + " from width " + bandHeight + "), got z=" + map.Size.z
-                        + ". THIS MAP IS NOT STACKED.");
+                    ABLog.Dev("V2: inferred layout DECLINED for " + map.Size.ToString() + " - expected z=" + num * num3 + " (bands=" + num + " x slot=" + num3 + " from width " + x + "), got z=" + map.Size.z + ". THIS MAP IS NOT STACKED.");
                 }
+
                 return false;
             }
-            slot = s;
-            surface = new CellRect(0, ABV2.SurfaceBand * s, map.Size.x, bandHeight);
-            if (logThis)
+
+            slot = num3;
+            surface = new CellRect(0, num2 * num3, map.Size.x, x);
+            if (flag)
             {
-                ABLog.Dev("V2: inferred layout ACCEPTED for " + map.Size + " - bands=" + bands
-                    + " slot=" + s + " surface rows " + surface.minZ + ".." + surface.maxZ);
+                ABLog.Dev("V2: inferred layout ACCEPTED for " + map.Size.ToString() + " - bands=" + num + " slot=" + num3 + " surface rows " + surface.minZ + ".." + surface.maxZ);
             }
+
             return true;
         }
 
@@ -179,7 +182,7 @@ namespace AsAboveSoBelow
             return parent is Settlement s && s.Faction != null && s.Faction.IsPlayer;
         }
 
-        [HarmonyPatch(typeof(MapGenerator), nameof(MapGenerator.GenerateMap))]
+        [HarmonyPatch(typeof(MapGenerator), "GenerateMap")]
         public static class Patch_MapGenerator_GenerateMap
         {
             private static void Prefix(ref IntVec3 mapSize, MapParent parent, bool isPocketMap)
@@ -187,100 +190,119 @@ namespace AsAboveSoBelow
                 pending = null;
                 try
                 {
-                    if (!ShouldBand(parent, isPocketMap))
+                    if (ShouldBand(parent, isPocketMap))
                     {
-                        return;
+                        int bandCount = ABMapSizeLimit.BandCountFor(parent.Tile);
+                        int num = ABMapSizeLimit.Clamp(mapSize.z, bandCount);
+                        int num2 = ABMapSizeLimit.Clamp(mapSize.x, bandCount);
+                        if (num != mapSize.z || num2 != mapSize.x)
+                        {
+                            ABLog.Dev("V2: clamped colony map from " + mapSize.x + "x" + mapSize.z + " to " + num2 + "x" + num + " (unclamp in mod settings).");
+                            mapSize = new IntVec3(num2, mapSize.y, num);
+                        }
+
+                        int num3 = ABMapSizeLimit.BandCountFor(parent.Tile);
+                        int surfaceBand = ABMapSizeLimit.SurfaceBandFor(parent.Tile);
+                        if (num3 <= 1)
+                        {
+                            ABLog.Dev("V2: level plan is a single level - generating an ordinary map.");
+                            return;
+                        }
+
+                        int z = mapSize.z;
+                        pending = new PendingLayout
+                        {
+                            bandCount = num3,
+                            bandHeight = z,
+                            surfaceBand = surfaceBand
+                        };
+                        int num4 = ABBandMap.SlotFor(z);
+                        mapSize = new IntVec3(mapSize.x, mapSize.y, num3 * num4);
+                        string[] array = new string[14]
+                        {
+                            "V2: banding new colony map -> ",
+                            null,
+                            null,
+                            null,
+                            null,
+                            null,
+                            null,
+                            null,
+                            null,
+                            null,
+                            null,
+                            null,
+                            null,
+                            null
+                        };
+                        IntVec3 intVec = mapSize;
+                        array[1] = intVec.ToString();
+                        array[2] = " (";
+                        array[3] = num3.ToString();
+                        array[4] = " bands of ";
+                        array[5] = z.ToString();
+                        array[6] = " + ";
+                        array[7] = (num4 - z).ToString();
+                        array[8] = " gutter, slot ";
+                        array[9] = num4.ToString();
+                        array[10] = ", surface band ";
+                        array[11] = surfaceBand.ToString();
+                        array[12] = (ABOrbitRules.IsSpaceTile(parent.Tile) ? ", orbit: no basement" : "");
+                        array[13] = ").";
+                        ABLog.Dev(string.Concat(array));
                     }
-                    // Cap the BAND size before inflating. Enforced here as well as in the
-                    // chooser so a scenario, another mod or an old config cannot slip a
-                    // 325-wide colony past it - that would be ~317k cells through the
-                    // pathfinding grid job every request.
-                    int capped = ABMapSizeLimit.Clamp(mapSize.z);
-                    int cappedX = ABMapSizeLimit.Clamp(mapSize.x);
-                    if (capped != mapSize.z || cappedX != mapSize.x)
-                    {
-                        ABLog.Dev("V2: clamped colony map from " + mapSize.x + "x" + mapSize.z
-                            + " to " + cappedX + "x" + capped + " (unclamp in mod settings).");
-                        mapSize = new IntVec3(cappedX, mapSize.y, capped);
-                    }
-                    int bandCount = ABV2.BandCount;
-                    if (bandCount <= 1)
-                    {
-                        // The player asked for no levels above or below: an ordinary map.
-                        // Banding a single band would leave Banded false anyway, but the
-                        // gutter carve and the z inflation would still run.
-                        ABLog.Dev("V2: level plan is a single level - generating an ordinary map.");
-                        return;
-                    }
-                    int h = mapSize.z;
-                    pending = new PendingLayout
-                    {
-                        bandCount = bandCount,
-                        bandHeight = h,
-                        surfaceBand = ABV2.SurfaceBand
-                    };
-                    int slot = ABBandMap.SlotFor(h);
-                    mapSize = new IntVec3(mapSize.x, mapSize.y, bandCount * slot);
-                    ABLog.Dev("V2: banding new colony map -> " + mapSize + " (" + bandCount
-                        + " bands of " + h + " + " + (slot - h) + " gutter, slot " + slot
-                        + ", surface band " + ABV2.SurfaceBand + ").");
                 }
-                catch (Exception e)
+                catch (Exception ex)
                 {
                     pending = null;
-                    Log.Error(ABLog.Tag + " V2: band size inflation failed, generating an ordinary map: " + e);
+                    Log.Error("[As above, So below] V2: band size inflation failed, generating an ordinary map: " + ex);
                 }
             }
 
             private static void Postfix(Map __result)
             {
-                PendingLayout p = pending;
-                pending = null;
-                if (p == null || __result == null)
+                PendingLayout pending = ABBandedGeneration.pending;
+                ABBandedGeneration.pending = null;
+                if (pending == null || __result == null)
                 {
                     return;
                 }
+
                 try
                 {
-                    ABBandMap bands = __result.GetComponent<ABBandMap>();
-                    if (bands == null)
+                    ABBandMap component = __result.GetComponent<ABBandMap>();
+                    if (component == null)
                     {
-                        Log.Error(ABLog.Tag + " V2: ABBandMap component missing on a banded map.");
+                        Log.Error("[As above, So below] V2: ABBandMap component missing on a banded map.");
                         return;
                     }
-                    // The heavy work (Setup + Rescue + Carve) has already happened in the
-                    // GenerateContentsIntoMap postfix below, INSIDE the generation window.
-                    // This safety net only fires if that patch somehow did not run.
+
                     if (!carved)
                     {
-                        Log.Warning(ABLog.Tag + " V2: in-window carve did not run; carving"
-                            + " post-init (slow path).");
-                        bands.Setup(p.bandCount, p.bandHeight, p.surfaceBand);
-                        bands.SnapshotClimate(ABMod.Settings);
+                        Log.Warning("[As above, So below] V2: in-window carve did not run; carving post-init (slow path).");
+                        component.Setup(pending.bandCount, pending.bandHeight, pending.surfaceBand);
+                        component.SnapshotClimate(ABMod.Settings);
                         ABPatchLifecycle.Recheck("post-init-carve");
-                        var slow = System.Diagnostics.Stopwatch.StartNew();
-                        ABStructureFit.RescueStraddlingStructures(__result, bands);
-                        RescueStrandedColonists(__result, bands);
-                        Carve(__result, bands);
-                        carveMs = slow.Elapsed.TotalMilliseconds;
+                        Stopwatch stopwatch = Stopwatch.StartNew();
+                        ABStructureFit.RescueStraddlingStructures(__result, component);
+                        RescueStrandedColonists(__result, component);
+                        Carve(__result, component);
+                        carveMs = stopwatch.Elapsed.TotalMilliseconds;
                     }
-                    var watch = System.Diagnostics.Stopwatch.StartNew();
-                    FixPlayerStartSpot(__result, bands);
-                    ABGenProfile.Report(__result, carveMs, watch.Elapsed.TotalMilliseconds);
-                    // Open the decoration window LAST, so it covers exactly the period after
-                    // generation is finished and before the map ticks - which is when every
-                    // LongEventHandler.ExecuteWhenFinished decorator (VEF's ObjectSpawnsDef
-                    // among them) drops its scenery onto a map it believes is one level.
+
+                    Stopwatch stopwatch2 = Stopwatch.StartNew();
+                    FixPlayerStartSpot(__result, component);
+                    ABGenProfile.Report(__result, carveMs, stopwatch2.Elapsed.TotalMilliseconds);
                     ABAirSpawnGuard.ArmDecorationWindow(__result);
                 }
-                catch (Exception e)
+                catch (Exception ex)
                 {
-                    Log.Error(ABLog.Tag + " V2: band carve failed: " + e);
+                    Log.Error("[As above, So below] V2: band carve failed: " + ex);
                 }
                 finally
                 {
                     carved = false;
-                    carveMs = 0;
+                    carveMs = 0.0;
                 }
             }
         }
@@ -329,19 +351,9 @@ namespace AsAboveSoBelow
         ///     as it does on load - previously Setup ran after Map.FinalizeInit, so every
         ///     Banded-gated hook in it silently no-opped for a brand-new colony.
         /// </summary>
-        [HarmonyPatch(typeof(MapGenerator), nameof(MapGenerator.GenerateContentsIntoMap))]
+        [HarmonyPatch(typeof(MapGenerator), "GenerateContentsIntoMap")]
         public static class Patch_GenerateContents_ABCarveInWindow
         {
-            /// <summary>
-            /// §99: capture EXACTLY the gensteps that ran, from the engine's own argument.
-            ///
-            /// The band dressing pass needs to re-run a subset of them per band, and the
-            /// obvious source - <c>MapGeneratorDef.genSteps</c> - is the wrong one: it misses
-            /// everything tile mutators, DLCs and mods inject at runtime, which on a modded
-            /// profile is most of the interesting content. The argument is the ground truth
-            /// and it is a public signature, so it cannot rot the way a private static field
-            /// name can (rule 62: finished-answer tables rot, and so do foreign field names).
-            /// </summary>
             private static void Prefix(IEnumerable<GenStepWithParams> genStepDefs)
             {
                 ABBandDressing.CaptureSteps(genStepDefs);
@@ -349,67 +361,47 @@ namespace AsAboveSoBelow
 
             private static void Postfix(Map map)
             {
-                PendingLayout p = pending;
-                if (p == null || map == null || carved)
+                PendingLayout pending = ABBandedGeneration.pending;
+                if (pending == null || map == null || carved)
                 {
                     return;
                 }
+
                 try
                 {
-                    ABBandMap bands = map.GetComponent<ABBandMap>();
-                    if (bands == null)
+                    ABBandMap component = map.GetComponent<ABBandMap>();
+                    if (component != null)
                     {
-                        return; // GenerateMap postfix will complain and slow-path it
+                        ABGenProfile.Disarm();
+                        component.Setup(pending.bandCount, pending.bandHeight, pending.surfaceBand);
+                        component.SnapshotClimate(ABMod.Settings);
+                        ABPatchLifecycle.Recheck("in-window-carve");
+                        Stopwatch stopwatch = Stopwatch.StartNew();
+                        Stopwatch stopwatch2 = Stopwatch.StartNew();
+                        ABStructureFit.RescueStraddlingStructures(map, component);
+                        ABGenProfile.Phase("StructureFit", stopwatch2.Elapsed.TotalMilliseconds);
+                        RescueStrandedColonists(map, component);
+                        CellRect cellRect = component.RectOfBand(component.surfaceBand);
+                        if (GeologicalLandformsCompat.DiagEnabled)
+                        {
+                            GeologicalLandformsCompat.Diag("V2: surface band BEFORE carve [" + GeologicalLandformsCompat.CensusOf(map, cellRect.minZ, cellRect.Height) + "]\n    edifices: " + GeologicalLandformsCompat.TopEdificesIn(map, cellRect.minZ, cellRect.Height));
+                        }
+
+                        Carve(map, component);
+                        ABGLBiomeGridSync.Sync(map, component, "carve");
+                        ABLog.Dev("V2: §100 field centring this session: " + Patch_Translate_ABSurfaceCentre.redirected + " half-stack translate(s) moved to the surface centre, " + Patch_TileMutatorWorker_River_ABBandEdgeNodes.rebased + " river edge-node pair(s) rebased onto the band.");
+                        if (GeologicalLandformsCompat.DiagEnabled)
+                        {
+                            GeologicalLandformsCompat.Diag("V2: surface band AFTER  carve [" + GeologicalLandformsCompat.CensusOf(map, cellRect.minZ, cellRect.Height) + "] (bandCount=" + component.bandCount + " surfaceBand=" + component.surfaceBand + " mapSize=" + map.Size.ToString() + ")");
+                        }
+
+                        carveMs = stopwatch.Elapsed.TotalMilliseconds;
+                        carved = true;
                     }
-                    // Stop the genstep profiler first so the carve's own DeepProfiler
-                    // traffic (from GenSpawn internals) cannot pollute the genstep table.
-                    ABGenProfile.Disarm();
-                    bands.Setup(p.bandCount, p.bandHeight, p.surfaceBand);
-                    // Freeze the climate onto the colony at the same moment as its shape:
-                    // read live from settings instead and moving a slider would re-climate
-                    // every existing save.
-                    bands.SnapshotClimate(ABMod.Settings);
-                    // The map just became banded with a freshly frozen climate - ask the
-                    // patch lifecycle to converge (defers itself off the loader thread).
-                    ABPatchLifecycle.Recheck("in-window-carve");
-                    var watch = System.Diagnostics.Stopwatch.StartNew();
-                    // Structures BEFORE pawns: a scenario that starts the colony sealed
-                    // inside a vault places its pawns within the rect, so moving the
-                    // structure first carries them along and leaves the pawn rescue with
-                    // nothing to do. See ABStructureFit.RescueStraddlingStructures.
-                    var fit = System.Diagnostics.Stopwatch.StartNew();
-                    ABStructureFit.RescueStraddlingStructures(map, bands);
-                    ABGenProfile.Phase("StructureFit", fit.Elapsed.TotalMilliseconds);
-                    RescueStrandedColonists(map, bands);
-                    // §56.9 PROBE: brackets the carve so "a genstep did it" and "we did it"
-                    // can never again be confused. Costs one surface-band walk under DevMode.
-                    // ⚠ Gated on DiagEnabled, not just wrapped in Diag: CensusOf and
-                    // TopEdificesIn each walk the entire surface band and the latter
-                    // allocates a dictionary. C# evaluates arguments first, so an ungated
-                    // call would pay all of that on every colony generation for every
-                    // player. The band-level ASSERTIONS inside CarveInner stay unconditional.
-                    CellRect probe = bands.RectOfBand(bands.surfaceBand);
-                    if (GeologicalLandformsCompat.DiagEnabled)
-                    {
-                        GeologicalLandformsCompat.Diag("V2: surface band BEFORE carve ["
-                            + GeologicalLandformsCompat.CensusOf(map, probe.minZ, probe.Height) + "]"
-                            + "\n    edifices: "
-                            + GeologicalLandformsCompat.TopEdificesIn(map, probe.minZ, probe.Height));
-                    }
-                    Carve(map, bands);
-                    if (GeologicalLandformsCompat.DiagEnabled)
-                    {
-                        GeologicalLandformsCompat.Diag("V2: surface band AFTER  carve ["
-                            + GeologicalLandformsCompat.CensusOf(map, probe.minZ, probe.Height)
-                            + "] (bandCount=" + bands.bandCount + " surfaceBand=" + bands.surfaceBand
-                            + " mapSize=" + map.Size + ")");
-                    }
-                    carveMs = watch.Elapsed.TotalMilliseconds;
-                    carved = true;
                 }
-                catch (Exception e)
+                catch (Exception ex)
                 {
-                    Log.Error(ABLog.Tag + " V2: in-window band carve failed: " + e);
+                    Log.Error("[As above, So below] V2: in-window band carve failed: " + ex);
                 }
             }
         }

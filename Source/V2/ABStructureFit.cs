@@ -109,21 +109,29 @@ namespace AsAboveSoBelow
         /// falls through to vanilla - correct, because the preview renders terrain and
         /// terrain gensteps do not consult Map.Center.
         /// </summary>
-        [HarmonyPatch(typeof(Map), "get_Center")]
+        [HarmonyPatch(typeof(Map), "Center", MethodType.Getter)]
         public static class Patch_Map_ABSurfaceCenter
         {
             private static bool Prefix(Map __instance, ref IntVec3 __result)
             {
                 try
                 {
+                    if (ABOrbitalDebrisBands.TryOverride(__instance, out var centre))
+                    {
+                        __result = centre;
+                        return false;
+                    }
+
                     if (MapGenerator.mapBeingGenerated != __instance)
                     {
                         return true;
                     }
-                    if (!ABBandedGeneration.TryPendingSurfaceRect(__instance, out CellRect surface, out _))
+
+                    if (!ABBandedGeneration.TryPendingSurfaceRect(__instance, out var surface, out var _))
                     {
-                        return true; // not a banded generation
+                        return true;
                     }
+
                     __result = surface.CenterCell;
                     return false;
                 }

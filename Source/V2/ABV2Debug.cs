@@ -54,17 +54,10 @@ namespace AsAboveSoBelow
 
         public static void Transit(string msg)
         {
-            if (LogTransit)
+            if (LogTransit && TracingAllowed)
             {
-                // ⚠ A DIAGNOSTIC THAT CAN SILENCE ITSELF IS A TRAP. Vanilla stops logging
-                // outright at 1000 messages ("Reached max messages limit"), and one live
-                // firefight with tracing on hits that wall mid-experiment - runs #404 and
-                // #405 both did, and everything after the wall was silently unrecorded.
-                // Resetting the counter while an opt-in trace is running keeps the budget
-                // from ever tripping; the cost is unbounded log growth, which is exactly
-                // what someone who turned on per-shot tracing asked for.
                 Log.ResetMessageCount();
-                Log.Warning(ABLog.Tag + " TRANSIT: " + msg);
+                Log.Warning("[As above, So below] TRANSIT: " + msg);
             }
         }
 
@@ -74,26 +67,18 @@ namespace AsAboveSoBelow
 
         public static void Combat(string msg)
         {
-            if (LogCombat)
+            if (LogCombat && TracingAllowed)
             {
-                Log.ResetMessageCount(); // same reasoning as Transit - see the banner there
-                Log.Warning(ABLog.Tag + " COMBAT: " + msg);
+                Log.ResetMessageCount();
+                Log.Warning("[As above, So below] COMBAT: " + msg);
             }
         }
 
         public static string StateSummary()
         {
-            // massFieldFade lives on the cap layer rather than here, but it is a RENDERING
-            // toggle a tester can leave flipped mid-session, and an UNSTAMPED toggle is
-            // exactly how a later reading gets poisoned - the reason the bisect flags are
-            // stamped at all.
-            return "terrain=" + DrawBelowTerrain
-                + " things=" + DrawBelowThings
-                + " airMask=" + DrawBelowAirMask
-                + " lighting=" + DrawBelowLighting
-                + " belowWater=" + DrawBelowWater
-                + " massFieldFade=" + SectionLayer_ABMountainCap.MassFieldFadeEnabled
-                + " massDepthCut=" + SectionLayer_ABMountainCap.MassDepthCutEnabled;
+            return "terrain=" + DrawBelowTerrain + " things=" + DrawBelowThings + " airMask=" + DrawBelowAirMask + " lighting=" + DrawBelowLighting + " belowWater=" + DrawBelowWater + " massFieldFade=" + SectionLayer_ABMountainCap.MassFieldFadeEnabled + " massDepthCut=" + SectionLayer_ABMountainCap.MassDepthCutEnabled + " rockRootFill=" + SectionLayer_ABRockRootFill.Enabled + " ledgeRockTile=" + SectionLayer_ABMountainCap.LedgeRockTile + " cornerFillers=" + SectionLayer_ABMountainCap.CornerFillersEnabled + " stoneBorder=" + SectionLayer_ABMountainCap.StoneBorderRule + " southStretch=" + SectionLayer_ABMountainCap.SouthFillerStretch + " shadowFix=" + SectionLayer_ABRockRootFill.ShadowFixActive;
         }
+        internal static bool TracingAllowed => ABMod.Settings != null && ABMod.Settings.verboseLogging;
+
     }
 }
