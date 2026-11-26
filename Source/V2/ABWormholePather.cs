@@ -1093,9 +1093,8 @@ namespace AsAboveSoBelow
         /// That IS the difference: #297 deferred the DECISION, this defers the MOVE.
         ///
         /// ⚠ THE STAGGER IS BELT TO STOPDEAD'S BRACES, and it is aspirational per pawn
-        /// (StaggerDurationFactor, Anomaly awoken corpses). If a pawn shrugs it off and
-        /// steps away, TickCrossings sees the cell change and fires the teleport early - a
-        /// shorter show, never a desync.
+        /// (StaggerDurationFactor, Anomaly awoken corpses). If a pawn steps away,
+        /// TickCrossings replans a native route and advances a legacy crossing early.
         /// </summary>
         private static bool BeginCrossing(Pawn pawn, Transit t)
         {
@@ -1206,6 +1205,22 @@ namespace AsAboveSoBelow
             {
                 try
                 {
+#if RIMWORLD_17
+                    Pawn pawn = crossing.pawn;
+                    if (crossing.nativePortal)
+                    {
+                        if (!pawn.Spawned || pawn.Dead || pawn.CurJob != crossing.job)
+                            continue;
+
+                        if (pawn.Position != crossing.holdCell)
+                        {
+                            ABStairAnim.Clear(pawn);
+                            ABTransitVisuals.Clear(pawn);
+                            ABNativePortals.Replan(pawn, crossing.realDest, crossing.realPeMode);
+                            continue;
+                        }
+                    }
+#endif
                     CarryNow(crossing.pawn, new Transit
                     {
                         near = crossing.near,
@@ -1618,6 +1633,27 @@ namespace AsAboveSoBelow
                         IntVec3 cell = pather.Destination.Cell;
                         if (cell == transitRecord.entryCell || cell == transitRecord.approachCell || transitRecord.near.OccupiedRect().Contains(cell))
                         {
+#if RIMWORLD_17
+                            if (ABNativePortals.UsesNativeRouting(key))
+                            {
+                                // Old saves carry no job ID. Require the saved leg and a
+                                // matching active job target before replacing the pather's
+                                // local destination with the original order.
+                                LocalTargetInfo destination = transitRecord.realDest;
+                                int remaining = transitRecord.expiresAtTick - Find.TickManager.TicksGame;
+                                if (transitRecord.near.Map == key && transitRecord.far.Map == key
+                                    && remaining > 0 && remaining <= TransitTimeoutTicks
+                                    && (!pather.Destination.HasThing || pather.Destination.Thing == transitRecord.near)
+                                    && (destination == curJob.targetA || destination == curJob.targetB
+                                        || destination == curJob.targetC)
+                                    && ABBands.SameBand(key, transitRecord.pawn.Position, transitRecord.near.Position))
+                                {
+                                    ABNativePortals.Replan(transitRecord.pawn, destination, transitRecord.realPeMode);
+                                    num++;
+                                }
+                                continue;
+                            }
+#endif
                             pending[transitRecord.pawn.thingIDNumber] = new Transit
                             {
                                 realDest = transitRecord.realDest,
