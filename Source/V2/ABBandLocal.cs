@@ -1,4 +1,8 @@
 using System;
+using System.Collections.Generic;
+using System.Reflection.Emit;
+using HarmonyLib;
+using RimWorld;
 using Verse;
 using Verse.Noise;
 
@@ -42,18 +46,21 @@ namespace AsAboveSoBelow
             {
                 return false;
             }
-            if (!ABBandedGeneration.TryPendingSurfaceRect(map, out CellRect surface, out int s) || s <= 0)
+
+            if (!ABBandedGeneration.TryPendingSurfaceRect(map, out var surface, out var slot2) || slot2 <= 0)
             {
                 return false;
             }
-            int h = surface.Height;
-            if (h <= 0 || h >= map.Size.z)
+
+            int height = surface.Height;
+            if (height <= 0 || height >= map.Size.z)
             {
-                return false; // unbanded, or a degenerate plan - leave vanilla untouched
+                return false;
             }
-            bandHeight = h;
-            slot = s;
-            offset = (map.Size.z - h) / 2;
+
+            bandHeight = height;
+            slot = slot2;
+            offset = surface.minZ;
             return true;
         }
 
@@ -106,6 +113,35 @@ namespace AsAboveSoBelow
         internal static ModuleBase Wrap(ModuleBase module, int slot, int offset)
         {
             return module == null ? null : new BandLocalModule(module, slot, offset);
+        }
+    }
+
+    [HarmonyPatch(typeof(TileMutatorWorker_Plateau), nameof(TileMutatorWorker_Plateau.Init))]
+    internal static class Patch_TileMutatorWorker_Plateau_ABBandSize
+    {
+        private static IntVec3 PlateauSize(Map map)
+        {
+            IntVec3 size = map.Size;
+            if (ABGuard.On(ABGuard.LevelGen) && ABBandLocal.TryBandGeometry(map, out int height, out _, out _))
+            {
+                size.z = height;
+            }
+            return size;
+        }
+
+        private static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
+        {
+            var sizeGetter = AccessTools.PropertyGetter(typeof(Map), nameof(Map.Size));
+            var plateauSize = AccessTools.Method(typeof(Patch_TileMutatorWorker_Plateau_ABBandSize), nameof(PlateauSize));
+            foreach (CodeInstruction instruction in instructions)
+            {
+                if (instruction.Calls(sizeGetter))
+                {
+                    instruction.opcode = OpCodes.Call;
+                    instruction.operand = plateauSize;
+                }
+                yield return instruction;
+            }
         }
     }
 }

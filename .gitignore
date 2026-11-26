@@ -1,4 +1,4 @@
-# Build artifacts (Assemblies/*.dll IS committed deliberately: it is the shipped artifact)
+# Build artifacts (versioned Assemblies DLLs are committed as shipped artifacts)
 Source/obj/
 Source/bin/
 *.pdb

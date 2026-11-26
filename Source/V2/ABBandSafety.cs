@@ -592,8 +592,7 @@ namespace AsAboveSoBelow
     [HarmonyPatch(typeof(GenStep_Scatterer), "CanScatterAt")]
     public static class Patch_GenStep_Scatterer_ABBandSeam
     {
-        private static void Postfix(GenStep_Scatterer __instance, IntVec3 loc, Map map,
-            ref bool __result)
+        private static void Postfix(GenStep_Scatterer __instance, IntVec3 loc, Map map, ref bool __result)
         {
             try
             {
@@ -601,34 +600,45 @@ namespace AsAboveSoBelow
                 {
                     return;
                 }
-                // §99: while a band scope is armed the scatterer has been told the map IS
-                // one band, and this is the veto half of that lie. It lives HERE, inside the
-                // existing seam postfix, rather than in a second postfix of our own on the
-                // same target - rule 50: two own patches cancel silently, and one funnel with
-                // two clauses is always easier to reason about than two patches with one.
+
                 if (!ABBandScope.Allows(map, loc))
                 {
                     __result = false;
                     return;
                 }
-                if (!ABBandSafety.TryBandRectOf(map, loc, out CellRect band))
+
+                foreach (IntVec3 item in ABBandSafety.FootprintAt(__instance, loc))
+                {
+                    if (item.InBounds(map))
+                    {
+                        TerrainDef terrainDef = map.terrainGrid.TerrainAt(item);
+                        if (terrainDef == ABDefOf.AB_RoofSurface || terrainDef == ABDefOf.AB_WallTop)
+                        {
+                            __result = false;
+                            return;
+                        }
+                    }
+                }
+
+                if (!ABBandSafety.TryBandRectOf(map, loc, out var band))
                 {
                     return;
                 }
-                CellRect foot = ABBandSafety.FootprintAt(__instance, loc);
-                int spare = band.Height - foot.Height;
-                if (spare < 0)
+
+                CellRect cellRect = ABBandSafety.FootprintAt(__instance, loc);
+                int num = band.Height - cellRect.Height;
+                if (num >= 0)
                 {
-                    return; // cannot fit in a level at all; ABStructureFit will say so
-                }
-                int m = ABBandSafety.SeamMarginFor(band.Height);
-                if (2 * m > spare)
-                {
-                    m = spare / 2;
-                }
-                if (foot.minZ < band.minZ + m || foot.maxZ > band.maxZ - m)
-                {
-                    __result = false;
+                    int num2 = ABBandSafety.SeamMarginFor(band.Height);
+                    if (2 * num2 > num)
+                    {
+                        num2 = num / 2;
+                    }
+
+                    if (cellRect.minZ < band.minZ + num2 || cellRect.maxZ > band.maxZ - num2)
+                    {
+                        __result = false;
+                    }
                 }
             }
             catch
@@ -694,6 +704,55 @@ namespace AsAboveSoBelow
             __result = new IntVec3(
                 Rand.RangeInclusive(s.minX, s.maxX), 0,
                 Rand.RangeInclusive(s.minZ, s.maxZ));
+            return false;
+        }
+    }
+}
+
+namespace AsAboveSoBelow
+{
+    [HarmonyPatch(typeof(IntVec3Utility), nameof(IntVec3Utility.DistanceToEdge))]
+    internal static class Patch_IntVec3Utility_ABBandDistanceToEdge
+    {
+        private static bool Prefix(IntVec3 v, Map map, ref int __result)
+        {
+            if (!ABBandSafety.TryBandRectOf(map, v, out CellRect band))
+            {
+                return true;
+            }
+
+            int x = Math.Min(v.x - band.minX, band.maxX - v.x);
+            int z = Math.Min(v.z - band.minZ, band.maxZ - v.z);
+            __result = Math.Max(0, Math.Min(x, z));
+            return false;
+        }
+    }
+
+    [HarmonyPatch(typeof(CellFinder), nameof(CellFinder.RandomNotEdgeCell))]
+    internal static class Patch_CellFinder_ABRandomNotEdgeCell
+    {
+        private static bool Prefix(int minEdgeDistance, Map map, ref IntVec3 __result)
+        {
+            ABBandMap bands = ABBands.CompOf(map);
+            CellRect surface;
+            if (bands != null && bands.Banded)
+            {
+                surface = bands.RectOfBand(bands.surfaceBand);
+            }
+            else if (!ABBandedGeneration.TryPendingSurfaceRect(map, out surface, out _))
+            {
+                return true;
+            }
+
+            int margin = Math.Max(0, minEdgeDistance);
+            if (margin > (surface.Width - 1) / 2 || margin > (surface.Height - 1) / 2)
+            {
+                __result = IntVec3.Invalid;
+                return false;
+            }
+
+            __result = new IntVec3(Rand.RangeInclusive(surface.minX + margin, surface.maxX - margin),
+                0, Rand.RangeInclusive(surface.minZ + margin, surface.maxZ - margin));
             return false;
         }
     }

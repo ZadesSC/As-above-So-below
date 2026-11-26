@@ -1,3 +1,4 @@
+using System.Text;
 using System;
 using System.Collections.Generic;
 using HarmonyLib;
@@ -623,228 +624,147 @@ namespace AsAboveSoBelow
         {
             ClearSubMeshes(MeshParts.All);
             Map map = section.map;
-            // V2 banded maps reuse this layer wholesale. The atlas / link-mask / corner
-            // filler machinery below is map-agnostic; only two things are coupled to V1's
-            // pocket-map model - the "am I the sky level" test and where the GROUND cell
-            // lives. On a banded map the ground is the SAME map, one Slot down in z, so it
-            // resolves to a constant cell offset instead of a different Map.
-            // V1's pocket-map branch is gone: there is no Map.Level()/LowerMap() any more, so
-            // the layer is banded-only. On an unbanded map it simply emits nothing.
-            //
-            // The `banded` local (ABBands.Banded(map)) is gone with it: the bands.Banded test
-            // below is the same question asked of the component we need anyway, so the
-            // separate call was a second front-cache round trip per section regenerate for a
-            // strictly weaker answer (ABBands.Banded also says yes to a dev spike layout,
-            // which this layer cannot actually service - see below).
             if (!ABGuard.On(ABGuard.Rendering))
             {
                 return;
             }
+
             try
             {
                 EnsureQueue();
-                TerrainGrid grid = map.terrainGrid;
-                TerrainDef cap = ABDefOf.AB_MountainTop;
-                // The ground is the SAME map, one Slot down in z - a constant cell offset
-                // rather than a different Map.
-                ABBandMap bands = ABBands.CompOf(map);
-                // Require the REAL band component, not ABBands.Banded's answer - that one
-                // also returns true for a dev spike layout, and everything below depends on
-                // bands.Slot, which is 0 for an unbanded component. A spike map would have
-                // produced a zero ground offset and sampled its own cells.
-                if (bands == null || !bands.Banded)
+                TerrainGrid terrainGrid = map.terrainGrid;
+                TerrainDef aB_MountainTop = ABDefOf.AB_MountainTop;
+                ABBandMap aBBandMap = ABBands.CompOf(map);
+                if (aBBandMap == null || !aBBandMap.Banded)
                 {
                     return;
                 }
+
                 Map ground = map;
-                // One slot down is the band this one stands on - the surface for level +1,
-                // and the sky band below for level +2 and up, which is exactly right: each
-                // sky level's mass is projected from the level beneath it, so mountains
-                // taper as they rise.
-                IntVec3 groundOffset = new IntVec3(0, 0, -bands.Slot);
-                int surfaceBand = bands.surfaceBand;
-                ThingDef fallbackRock = FallbackRock(map);
+                IntVec3 intVec = new IntVec3(0, 0, -aBBandMap.Slot);
+                int surfaceBand = aBBandMap.surfaceBand;
+                ThingDef thingDef = FallbackRock(map);
                 float y = AltitudeLayer.FloorEmplacement.AltitudeFor();
-                bool emitted = false;
-                foreach (IntVec3 c in section.CellRect)
+                bool flag = false;
+                foreach (IntVec3 item in section.CellRect)
                 {
-                    // Banded: EVERY band above the surface caps, not just the first one -
-                    // with a multi-level plan there can be up to three. Mined-rock
-                    // leave-terrain also exists in the BASEMENT bands, which must never grow
-                    // a mountain top, hence a strict > rather than !=.
-                    //
-                    // Through the RESOLVED component, not the static ABBands.BandOf(map, c).
-                    // This is the first test in a 289-cell loop that runs for every section
-                    // regenerate, and the static form re-enters the front cache, re-checks
-                    // Banded and (before the spikeCount fast-out) probed a second weak table -
-                    // all to answer a question the local answers with one divide. Precisely
-                    // the redundancy ABBandEnv.BiomeOf's second overload exists to remove.
-                    if (bands.BandOf(c) <= surfaceBand)
+                    if (aBBandMap.BandOf(item) <= surfaceBand)
                     {
                         continue;
                     }
-                    TerrainDef t = grid.TerrainAt(c);
-                    // Open air beside the mass: the drop-off gets its shadow ring and
-                    // nothing else - see-through cells never take fill.
-                    if (ABBands.ShowsBelow(t))
-                    {
-                        emitted |= EmitDropShadowFan(map, grid, cap, c);
-                        continue;
-                    }
-                    bool minedFloor = ABMinedRockLookup.TryGetMinedRockDef(t, out ThingDef minedRock);
-                    if (t != cap && !minedFloor)
-                    {
-                        continue;
-                    }
-                    // STANDING NATURAL ROCK RENDERS NATIVELY, and this layer stays out
-                    // of its cells entirely.
-                    //
-                    // Suppressing those wall sprites (to make the mass one seamless
-                    // field) was a mistake with two reported symptoms: minable rock
-                    // read as walkable FLOOR - the wall/floor distinction is load
-                    // bearing gameplay information, not decoration - and ore veins,
-                    // robbed of the rock context their linked atlas assumes, closed
-                    // their outlines into blocky glyph shapes ("strange text" on
-                    // compacted steel). Vanilla wall sprites ARE how rock reads as
-                    // rock; the lip a wall throws onto adjacent floor is vanilla's
-                    // language for "standing rock above walkable ground", not an
-                    // artifact. Redundant outlines are fixed where they are actually
-                    // caused - the generator no longer speckles the mass into dozens
-                    // of tiny clusters.
-                    //
-                    // Nothing is emitted under a wall: the sprite is opaque, so a
-                    // field quad there is pure waste. Any OTHER edifice (torch,
-                    // furniture, built walls) keeps the field beneath it like
-                    // furniture on any floor (run-19).
-                    Building edifice = c.GetEdifice(map);
-                    if (edifice != null
-                        && (edifice.def.mineable
-                            || (edifice.def.building != null && edifice.def.building.isNaturalRock)))
-                    {
-                        continue;
-                    }
-                    // Fogged cells belong to vanilla's fog layer.
-                    if (map.fogGrid.IsFogged(c))
-                    {
-                        continue;
-                    }
-                    // Rock type comes from the GROUND map's rock at this column - the
-                    // stone the mass actually stands on (run-20 diagnosis: sky-side
-                    // walls/leave-terrains are noise-picked independently, producing
-                    // limestone patches over a slate mountain). Ground-sourced typing
-                    // also merges large regions into one material = one seamless
-                    // submesh. The mined-floor mapping stays for ELIGIBILITY only.
-                    ThingDef rock = GroundRockAt(ground, c + groundOffset) ?? fallbackRock;
-                    // Option B: is this one of the southern rim cells that form the
-                    // cliff face? If so every quad in this cell carries the vertical
-                    // brightness ramp, so face and lip shade together instead of the
-                    // tile repainting the face at full brightness.
-                    int faceDepth = CliffFaceDepth > 0
-                        ? FaceDepthAt(map, bands, grid, cap, c, CliffFaceDepth)
-                        : -1;
-                    Color32 shadeS = faceDepth >= 0 ? FaceShade(faceDepth, false) : White;
-                    Color32 shadeN = faceDepth >= 0 ? FaceShade(faceDepth, true) : White;
 
-                    // Cardinal AND diagonal links, hoisted above the field: the field is now
-                    // eroded to the same rule the atlas mask uses, so both need them and
-                    // computing them twice is how the two rules would drift apart.
-                    // (Graphic_Linked's own order: N=1 E=2 S=4 W=8.)
-                    bool n0 = Linked(map, grid, cap, c + IntVec3.North);
-                    bool e0 = Linked(map, grid, cap, c + IntVec3.East);
-                    bool s0 = Linked(map, grid, cap, c + IntVec3.South);
-                    bool w0 = Linked(map, grid, cap, c + IntVec3.West);
-                    bool nw0 = Linked(map, grid, cap, c + IntVec3.North + IntVec3.West);
-                    bool ne0 = Linked(map, grid, cap, c + IntVec3.North + IntVec3.East);
-                    bool sw0 = Linked(map, grid, cap, c + IntVec3.South + IntVec3.West);
-                    bool se0 = Linked(map, grid, cap, c + IntVec3.South + IntVec3.East);
+                    TerrainDef terrainDef = terrainGrid.TerrainAt(item);
+                    if (ABBands.ShowsBelow(terrainDef))
+                    {
+                        flag |= EmitDropShadowFan(map, terrainGrid, aB_MountainTop, item);
+                        continue;
+                    }
 
-                    // The unified field underlay: the rock's own rough terrain,
-                    // world-position sampled, on every open mass cell.
-                    TerrainDef rough = rock?.building?.naturalTerrain
-                        ?? fallbackRock?.building?.naturalTerrain;
-                    emitted |= EmitFieldAt(this, map, c, y, rough, shadeS, shadeN,
-                        n0, s0, e0, w0, sw0, nw0, ne0, se0);
-                    // NO atlas fallback here, deliberately. Drawing AtlasBaseFor() as a
-                    // flat 0..1-uv quad was the "compacted steel looks like strange
-                    // text" bug: that material is the whole LINKED ATLAS SHEET, so a
-                    // full-cell quad crams every sub-tile into one cell and the motif
-                    // repeats per cell as glyph soup. An atlas base is only ever valid
-                    // through MaterialAtlasPool.SubMaterialFromAtlas. If a modded rock
-                    // somehow has no rough terrain at all, this cell simply shows the
-                    // cap terrain - dull, but never wrong.
-                    // The plateau boundary: the meadow's own vanilla fade fan over
-                    // this mass cell (run-44 wanted a soft transition; the flat-tone
-                    // skirt yielded to the real fade mechanic).
-                    emitted |= EmitMeadowFade(map, grid, c, y);
-                    // A direction links when the mass continues there. Interior cells
-                    // (mask 15) are the field alone - the atlas' fully-linked tile is
-                    // near-flat and adds nothing but a tone seam.
-                    int mask = (n0 ? 1 : 0) | (e0 ? 2 : 0) | (s0 ? 4 : 0) | (w0 ? 8 : 0);
-                    if (mask == 15)
+                    bool flag2 = ABMinedRockLookup.TryGetMinedRockDef(terrainDef, out var _);
+                    if (terrainDef != aB_MountainTop && !flag2)
                     {
                         continue;
                     }
-                    Graphic liveGraphic = LiveGraphicFor(rock);
-                    if (!(liveGraphic is Graphic_Linked))
+
+                    Building edifice = item.GetEdifice(map);
+                    if ((edifice != null && (edifice.def.mineable || (edifice.def.building != null && edifice.def.building.isNaturalRock))) || map.fogGrid.IsFogged(item))
                     {
-                        // Variant mode (Better Mountains): BM's look is lip-less, so
-                        // the silhouette gets one deterministic variant sprite over
-                        // the (BM-recolored) field; interior is the field alone.
-                        Material[] variants = VariantsFor(rock);
-                        if (variants != null)
+                        continue;
+                    }
+
+                    ThingDef thingDef2 = GroundRockAt(ground, item + intVec) ?? thingDef;
+                    int num = ((CliffFaceDepth > 0) ? FaceDepthAt(map, aBBandMap, terrainGrid, aB_MountainTop, item, CliffFaceDepth) : (-1));
+                    Color32 color = ((num >= 0) ? FaceShade(num, northEdge: false) : White);
+                    Color32 color2 = ((num >= 0) ? FaceShade(num, northEdge: true) : White);
+                    bool flag3 = Linked(map, terrainGrid, aB_MountainTop, item + IntVec3.North);
+                    bool flag4 = Linked(map, terrainGrid, aB_MountainTop, item + IntVec3.East);
+                    bool flag5 = Linked(map, terrainGrid, aB_MountainTop, item + IntVec3.South);
+                    bool flag6 = Linked(map, terrainGrid, aB_MountainTop, item + IntVec3.West);
+                    bool flag7 = Linked(map, terrainGrid, aB_MountainTop, item + IntVec3.North + IntVec3.West);
+                    bool flag8 = Linked(map, terrainGrid, aB_MountainTop, item + IntVec3.North + IntVec3.East);
+                    bool flag9 = Linked(map, terrainGrid, aB_MountainTop, item + IntVec3.South + IntVec3.West);
+                    bool flag10 = Linked(map, terrainGrid, aB_MountainTop, item + IntVec3.South + IntVec3.East);
+                    Graphic graphic = LiveGraphicFor(thingDef2);
+                    bool flag11 = LedgeRockTile && graphic is Graphic_Linked && AtlasBaseFor(thingDef2) != null;
+                    bool flag12 = !flag11 || !CornerFillersEnabled;
+                    if (flag11 && !(flag3 & flag4 & flag5 & flag6 & flag7 & flag8 & flag9 & flag10))
+                    {
+                        flag12 = !SectionLayer_ABRockRootFill.Enabled || !SectionLayer_ABRockRootFill.TryPickLedgeGround(map, aBBandMap, terrainGrid, aB_MountainTop, item, out var _, out var _, out var _);
+                    }
+
+                    if (flag12)
+                    {
+                        TerrainDef rough = thingDef2?.building?.naturalTerrain ?? thingDef?.building?.naturalTerrain;
+                        flag |= EmitFieldAt(this, map, item, y, rough, color, color2, flag3, flag5, flag4, flag6, flag9, flag7, flag8, flag10);
+                    }
+
+                    flag |= EmitMeadowFade(map, terrainGrid, item, y);
+                    int num2 = (flag3 ? 1 : 0) | (flag4 ? 2 : 0) | (flag5 ? 4 : 0) | (flag6 ? 8 : 0);
+                    if (num2 == 15 && !flag11)
+                    {
+                        continue;
+                    }
+
+                    if (!(graphic is Graphic_Linked))
+                    {
+                        Material[] array = VariantsFor(thingDef2);
+                        if (array != null)
                         {
-                            Material vmat = QueueClone(variants[StableCellIndex(c, variants.Length)]);
-                            if (vmat != null)
+                            Material material = QueueClone(array[StableCellIndex(item, array.Length)]);
+                            if (material != null)
                             {
-                                Vector2 ds = liveGraphic != null ? liveGraphic.drawSize : Vector2.one;
-                                float hw = Mathf.Max(ds.x, 1f) * 0.5f;
-                                float hh = Mathf.Max(ds.y, 1f) * 0.5f;
-                                LayerSubMesh vsub = GetSubMesh(vmat);
-                                AddQuad(vsub, c.x + 0.5f - hw, c.z + 0.5f - hh,
-                                    c.x + 0.5f + hw, c.z + 0.5f + hh, y, shadeS, shadeN);
-                                emitted = true;
+                                Vector2 vector = graphic?.drawSize ?? Vector2.one;
+                                float num3 = Mathf.Max(vector.x, 1f) * 0.5f;
+                                float num4 = Mathf.Max(vector.y, 1f) * 0.5f;
+                                LayerSubMesh subMesh = GetSubMesh(material);
+                                AddQuad(subMesh, (float)item.x + 0.5f - num3, (float)item.z + 0.5f - num4, (float)item.x + 0.5f + num3, (float)item.z + 0.5f + num4, y, color, color2);
+                                flag = true;
                             }
                         }
+
                         continue;
                     }
-                    Material baseMat = AtlasBaseFor(rock);
-                    if (baseMat == null)
+
+                    Material material2 = AtlasBaseFor(thingDef2);
+                    if (material2 == null)
                     {
                         continue;
                     }
-                    // The silhouette: the atlas EDGE tile (pale lip + dark outline
-                    // toward the unlinked side) over the field, plus the vanilla
-                    // corner fillers covering the rounding the atlas bakes into tile
-                    // corners (Graphic_LinkedCornerFiller's exact rule).
-                    Material tile = QueueClone(MaterialAtlasPool.SubMaterialFromAtlas(baseMat, (LinkDirections)mask));
-                    if (tile == null)
+
+                    Material material3 = QueueClone(MaterialAtlasPool.SubMaterialFromAtlas(material2, (LinkDirections)num2));
+                    if (material3 == null)
                     {
                         continue;
                     }
-                    LayerSubMesh sub = GetSubMesh(tile);
-                    AddQuad(sub, c.x, c.z, c.x + 1, c.z + 1, y, shadeS, shadeN);
-                    emitted = true;
+
+                    LayerSubMesh subMesh2 = GetSubMesh(material3);
+                    AddQuad(subMesh2, item.x, item.z, item.x + 1, item.z + 1, y, color, color2);
+                    flag = true;
                     if (CornerFillersEnabled)
                     {
-                        if (sw0 && s0 && w0)
+                        if (flag9 & flag5 & flag6)
                         {
-                            AddCornerFiller(sub, map, c, -1, -1, y, shadeS);
+                            AddCornerFiller(subMesh2, map, item, -1, -1, y, color);
                         }
-                        if (nw0 && n0 && w0)
+
+                        if (flag7 & flag3 & flag6)
                         {
-                            AddCornerFiller(sub, map, c, -1, 1, y, shadeN);
+                            AddCornerFiller(subMesh2, map, item, -1, 1, y, color2);
                         }
-                        if (ne0 && n0 && e0)
+
+                        if (flag8 & flag3 & flag4)
                         {
-                            AddCornerFiller(sub, map, c, 1, 1, y, shadeN);
+                            AddCornerFiller(subMesh2, map, item, 1, 1, y, color2);
                         }
-                        if (se0 && s0 && e0)
+
+                        if (flag10 & flag5 & flag4)
                         {
-                            AddCornerFiller(sub, map, c, 1, -1, y, shadeS);
+                            AddCornerFiller(subMesh2, map, item, 1, -1, y, color);
                         }
                     }
                 }
-                if (emitted)
+
+                if (flag)
                 {
                     FinalizeMesh(MeshParts.All);
                 }
@@ -979,8 +899,7 @@ namespace AsAboveSoBelow
         /// <summary>Static form, so the see-below view can emit the same fans one or more
         /// bands up. Scratch arrays come from the caller rather than being allocated per
         /// cell - this runs for every mass cell of every section bake.</summary>
-        internal static bool EmitMeadowFadeAt(MapDrawLayer layer, Map map, TerrainGrid grid,
-            IntVec3 c, int zOffset, float y, bool[] fanCovered, TerrainDef[] adj)
+        internal static bool EmitMeadowFadeAt(MapDrawLayer layer, Map map, TerrainGrid grid, IntVec3 c, int zOffset, float y, bool[] fanCovered, TerrainDef[] adj)
         {
             adj[0] = MeadowAt(map, grid, c + IntVec3.North);
             adj[1] = MeadowAt(map, grid, c + IntVec3.South);
@@ -990,40 +909,79 @@ namespace AsAboveSoBelow
             adj[5] = MeadowAt(map, grid, c + IntVec3.North + IntVec3.West);
             adj[6] = MeadowAt(map, grid, c + IntVec3.North + IntVec3.East);
             adj[7] = MeadowAt(map, grid, c + IntVec3.South + IntVec3.East);
-            bool emitted = false;
+            bool flag = false;
             for (int i = 0; i < 8; i++)
             {
-                TerrainDef d = adj[i];
-                if (d == null)
+                if (flag)
+                {
+                    break;
+                }
+
+                flag = adj[i] != null;
+            }
+
+            if (!flag)
+            {
+                return false;
+            }
+
+            TerrainDef aB_MountainTop = ABDefOf.AB_MountainTop;
+            bool flag2 = false;
+            bool flag3 = false;
+            bool flag4 = false;
+            for (int j = 0; j < 8; j++)
+            {
+                IntVec3 c2 = c + GenAdj.AdjacentCells[j];
+                if (c2.InBounds(map) && !IsMassCell(map, grid, aB_MountainTop, c2))
+                {
+                    TerrainDef terrainDef = grid.TerrainAt(c2);
+                    if (terrainDef == ABDefOf.AB_RoofSurface)
+                    {
+                        flag3 = true;
+                    }
+                    else if (IsMeadowGround(terrainDef))
+                    {
+                        flag4 = true;
+                    }
+                    else
+                    {
+                        flag2 = true;
+                    }
+                }
+            }
+
+            bool result = false;
+            for (int k = 0; k < 8; k++)
+            {
+                TerrainDef terrainDef2 = adj[k];
+                if (terrainDef2 == null)
                 {
                     continue;
                 }
-                bool seen = false;
-                for (int j = 0; j < i; j++)
+
+                bool flag5 = false;
+                for (int l = 0; l < k; l++)
                 {
-                    if (adj[j] == d)
+                    if (adj[l] == terrainDef2)
                     {
-                        seen = true;
+                        flag5 = true;
                         break;
                     }
                 }
-                if (seen)
+
+                if (!flag5 && (!StoneBorderRule || !((terrainDef2 == ABDefOf.AB_RoofSurface) ? (flag4 | flag2) : (flag2 | flag3))))
                 {
-                    continue;
+                    Material material = FadeClone(map.terrainGrid.GetMaterial(terrainDef2, polluted: false, null));
+                    if (!(material == null))
+                    {
+                        ABNineFan.Cover(fanCovered, adj[0] == terrainDef2, adj[1] == terrainDef2, adj[2] == terrainDef2, adj[3] == terrainDef2, adj[4] == terrainDef2, adj[5] == terrainDef2, adj[6] == terrainDef2, adj[7] == terrainDef2);
+                        ABNineFan.AddFan(layer.GetSubMesh(material), c.x, c.z + zOffset, y + 0.04f, fanCovered, White, ClearWhite);
+                        result = true;
+                    }
                 }
-                Material mat = FadeClone(map.terrainGrid.GetMaterial(d, false, null));
-                if (mat == null)
-                {
-                    continue;
-                }
-                ABNineFan.Cover(fanCovered,
-                    adj[0] == d, adj[1] == d, adj[2] == d, adj[3] == d,
-                    adj[4] == d, adj[5] == d, adj[6] == d, adj[7] == d);
-                ABNineFan.AddFan(layer.GetSubMesh(mat), c.x, c.z + zOffset,
-                    y + MeadowFadeAltBias, fanCovered, White, ClearWhite);
-                emitted = true;
             }
-            return emitted;
+
+            return result;
         }
 
         /// <summary>The neighbour's terrain when it is meadow ground the fade may sample,
@@ -1048,7 +1006,7 @@ namespace AsAboveSoBelow
             return t;
         }
 
-        private static readonly Color32 EdgeShadowed = new Color32(195, 195, 195, byte.MaxValue);
+        internal static readonly Color32 EdgeShadowed = new Color32(195, 195, 195, byte.MaxValue);
 
         private static readonly Color32 EdgeLit = new Color32(byte.MaxValue, byte.MaxValue, byte.MaxValue, byte.MaxValue);
 
@@ -1104,104 +1062,105 @@ namespace AsAboveSoBelow
         /// return false too - their own wall sprite carries the edge, and the below view
         /// prints that itself.
         /// </summary>
-        internal static bool EmitMassSilhouetteAt(MapDrawLayer layer, Map map, IntVec3 source,
-            int zOffset, float altitude, bool[] fanScratch, TerrainDef[] adjScratch)
+        internal static bool EmitMassSilhouetteAt(MapDrawLayer layer, Map map, IntVec3 source, int zOffset, float altitude, bool[] fanScratch, TerrainDef[] adjScratch)
         {
             if (layer == null || map == null || !ABGuard.On(ABGuard.Rendering))
             {
                 return false;
             }
-            ABBandMap bands = ABBands.CompOf(map);
-            if (bands == null || !bands.Banded)
+
+            ABBandMap aBBandMap = ABBands.CompOf(map);
+            if (aBBandMap == null || !aBBandMap.Banded)
             {
                 return false;
             }
-            TerrainGrid grid = map.terrainGrid;
-            TerrainDef cap = ABDefOf.AB_MountainTop;
-            if (!IsMassCell(map, grid, cap, source))
+
+            TerrainGrid terrainGrid = map.terrainGrid;
+            TerrainDef aB_MountainTop = ABDefOf.AB_MountainTop;
+            if (!IsMassCell(map, terrainGrid, aB_MountainTop, source))
             {
                 return false;
             }
-            Building edifice = map.edificeGrid[source];
-            if (edifice != null
-                && (edifice.def.mineable
-                    || (edifice.def.building != null && edifice.def.building.isNaturalRock)))
+
+            Building building = map.edificeGrid[source];
+            if (building != null && (building.def.mineable || (building.def.building != null && building.def.building.isNaturalRock)))
             {
-                return false; // its own sprite draws the edge
+                return false;
             }
+
             EnsureQueue();
-            ThingDef rock = GroundRockAt(map, source + new IntVec3(0, 0, -bands.Slot))
-                ?? FallbackRock(map);
-            if (!(LiveGraphicFor(rock) is Graphic_Linked))
-            {
-                return false; // variant-mode (Better Mountains) rocks have no lip to draw
-            }
-            Material baseMat = AtlasBaseFor(rock);
-            if (baseMat == null)
+            ThingDef rockDef = GroundRockAt(map, source + new IntVec3(0, 0, -aBBandMap.Slot)) ?? FallbackRock(map);
+            if (!(LiveGraphicFor(rockDef) is Graphic_Linked))
             {
                 return false;
             }
-            // The meadow fades belong to the mass wherever it is seen from, interior cells
-            // included - grass creeping onto rock is not an edge-only effect.
-            bool emitted = false;
+
+            Material material = AtlasBaseFor(rockDef);
+            if (material == null)
+            {
+                return false;
+            }
+
+            bool result = false;
             if (fanScratch != null && adjScratch != null)
             {
-                emitted = EmitMeadowFadeAt(layer, map, grid, source, zOffset, altitude,
-                    fanScratch, adjScratch);
+                result = EmitMeadowFadeAt(layer, map, terrainGrid, source, zOffset, altitude, fanScratch, adjScratch);
             }
-            bool n0 = Linked(map, grid, cap, source + IntVec3.North);
-            bool e0 = Linked(map, grid, cap, source + IntVec3.East);
-            bool s0 = Linked(map, grid, cap, source + IntVec3.South);
-            bool w0 = Linked(map, grid, cap, source + IntVec3.West);
-            int mask = (n0 ? 1 : 0) | (e0 ? 2 : 0) | (s0 ? 4 : 0) | (w0 ? 8 : 0);
-            if (mask == 15)
+
+            bool flag = Linked(map, terrainGrid, aB_MountainTop, source + IntVec3.North);
+            bool flag2 = Linked(map, terrainGrid, aB_MountainTop, source + IntVec3.East);
+            bool flag3 = Linked(map, terrainGrid, aB_MountainTop, source + IntVec3.South);
+            bool flag4 = Linked(map, terrainGrid, aB_MountainTop, source + IntVec3.West);
+            int num = (flag ? 1 : 0) | (flag2 ? 2 : 0) | (flag3 ? 4 : 0) | (flag4 ? 8 : 0);
+            if (num == 15 && !LedgeRockTile)
             {
-                return emitted; // interior: no lip, but its fades still count
+                return result;
             }
-            Material tile = QueueClone(
-                MaterialAtlasPool.SubMaterialFromAtlas(baseMat, (LinkDirections)mask));
-            if (tile == null)
-            {
-                return false;
-            }
-            LayerSubMesh sub = layer.GetSubMesh(tile);
-            if (sub == null)
+
+            Material material2 = QueueClone(MaterialAtlasPool.SubMaterialFromAtlas(material, (LinkDirections)num));
+            if (material2 == null)
             {
                 return false;
             }
-            // Cliff-face shading travels too: the vertical ramp is what tells the player a
-            // southern rim is a wall rather than more floor, and it reads exactly the same
-            // from two levels up as it does standing on it.
-            int faceDepth = CliffFaceDepth > 0
-                ? FaceDepthAt(map, bands, grid, cap, source, CliffFaceDepth)
-                : -1;
-            Color32 shadeS = faceDepth >= 0 ? FaceShade(faceDepth, false) : White;
-            Color32 shadeN = faceDepth >= 0 ? FaceShade(faceDepth, true) : White;
-            IntVec3 at = new IntVec3(source.x, source.y, source.z + zOffset);
-            AddQuad(sub, at.x, at.z, at.x + 1, at.z + 1, altitude, shadeS, shadeN);
+
+            LayerSubMesh subMesh = layer.GetSubMesh(material2);
+            if (subMesh == null)
+            {
+                return false;
+            }
+
+            int num2 = ((CliffFaceDepth > 0) ? FaceDepthAt(map, aBBandMap, terrainGrid, aB_MountainTop, source, CliffFaceDepth) : (-1));
+            Color32 color = ((num2 >= 0) ? FaceShade(num2, northEdge: false) : White);
+            Color32 color2 = ((num2 >= 0) ? FaceShade(num2, northEdge: true) : White);
+            IntVec3 c = new IntVec3(source.x, source.y, source.z + zOffset);
+            AddQuad(subMesh, c.x, c.z, c.x + 1, c.z + 1, altitude, color, color2);
             if (CornerFillersEnabled)
             {
-                bool nw = Linked(map, grid, cap, source + IntVec3.North + IntVec3.West);
-                bool ne = Linked(map, grid, cap, source + IntVec3.North + IntVec3.East);
-                bool sw = Linked(map, grid, cap, source + IntVec3.South + IntVec3.West);
-                bool se = Linked(map, grid, cap, source + IntVec3.South + IntVec3.East);
-                if (sw && s0 && w0)
+                bool flag5 = Linked(map, terrainGrid, aB_MountainTop, source + IntVec3.North + IntVec3.West);
+                bool flag6 = Linked(map, terrainGrid, aB_MountainTop, source + IntVec3.North + IntVec3.East);
+                bool flag7 = Linked(map, terrainGrid, aB_MountainTop, source + IntVec3.South + IntVec3.West);
+                bool flag8 = Linked(map, terrainGrid, aB_MountainTop, source + IntVec3.South + IntVec3.East);
+                if (flag7 & flag3 & flag4)
                 {
-                    AddCornerFiller(sub, map, at, -1, -1, altitude, shadeS);
+                    AddCornerFiller(subMesh, map, c, -1, -1, altitude, color);
                 }
-                if (nw && n0 && w0)
+
+                if (flag5 & flag & flag4)
                 {
-                    AddCornerFiller(sub, map, at, -1, 1, altitude, shadeN);
+                    AddCornerFiller(subMesh, map, c, -1, 1, altitude, color2);
                 }
-                if (ne && n0 && e0)
+
+                if (flag6 & flag & flag2)
                 {
-                    AddCornerFiller(sub, map, at, 1, 1, altitude, shadeN);
+                    AddCornerFiller(subMesh, map, c, 1, 1, altitude, color2);
                 }
-                if (se && s0 && e0)
+
+                if (flag8 & flag3 & flag2)
                 {
-                    AddCornerFiller(sub, map, at, 1, -1, altitude, shadeS);
+                    AddCornerFiller(subMesh, map, c, 1, -1, altitude, color);
                 }
             }
+
             return true;
         }
 
@@ -1375,39 +1334,47 @@ namespace AsAboveSoBelow
         /// Off-map diagonals shift the quad a full cell outward at five times
         /// the size, vanilla's map-edge rule, so no rounding shows against the
         /// off-map surround.</summary>
-        private static void AddCornerFiller(LayerSubMesh sub, Map map, IntVec3 c, int dx, int dz,
-            float y, Color32 color)
+        private static void AddCornerFiller(LayerSubMesh sub, Map map, IntVec3 c, int dx, int dz, float y, Color32 color)
         {
-            float cx = c.x + 0.5f + dx * FillerCornerOffset;
-            float cz = c.z + 0.5f + dz * FillerCornerOffset + FillerNorthShift;
-            float sx = 0.5f;
-            float sz = 0.5f;
-            IntVec3 diag = new IntVec3(c.x + dx, 0, c.z + dz);
-            if (!diag.InBounds(map))
+            float num = (float)c.x + 0.5f + (float)dx * 0.25f;
+            float num2 = (float)c.z + 0.5f + (float)dz * 0.25f + 0.09f;
+            float num3 = 0.5f;
+            float num4 = 0.5f;
+            IntVec3 c2 = new IntVec3(c.x + dx, 0, c.z + dz);
+            if (!c2.InBounds(map))
             {
-                if (diag.x < 0)
+                if (c2.x < 0)
                 {
-                    cx -= 1f;
-                    sx *= 5f;
+                    num--;
+                    num3 *= 5f;
                 }
-                if (diag.z < 0)
+
+                if (c2.z < 0)
                 {
-                    cz -= 1f;
-                    sz *= 5f;
+                    num2--;
+                    num4 *= 5f;
                 }
-                if (diag.x >= map.Size.x)
+
+                if (c2.x >= map.Size.x)
                 {
-                    cx += 1f;
-                    sx *= 5f;
+                    num++;
+                    num3 *= 5f;
                 }
-                if (diag.z >= map.Size.z)
+
+                if (c2.z >= map.Size.z)
                 {
-                    cz += 1f;
-                    sz *= 5f;
+                    num2++;
+                    num4 *= 5f;
                 }
             }
-            AddCornerQuad(sub, cx - sx * 0.5f, cz - sz * 0.5f, cx + sx * 0.5f, cz + sz * 0.5f,
-                y + FillerAltBias, color);
+
+            float num5 = num2 - num4 * 0.5f;
+            if (SouthFillerStretch && dz < 0 && c2.z >= 0)
+            {
+                num5 -= 0.09f;
+            }
+
+            AddCornerQuad(sub, num - num3 * 0.5f, num5, num + num3 * 0.5f, num2 + num4 * 0.5f, y + 0.03f, color);
         }
 
         /// <summary>Vanilla CornerFillUVs: all four verts sample the tile's solid
@@ -1686,5 +1653,52 @@ namespace AsAboveSoBelow
             sub.tris.Add(vi + 2);
             sub.tris.Add(vi + 3);
         }
+        internal static int MassMaskForProbe(Map map, IntVec3 c)
+        {
+            return (MassLinked(map, c + IntVec3.North) ? 1 : 0) | (MassLinked(map, c + IntVec3.East) ? 2 : 0) | (MassLinked(map, c + IntVec3.South) ? 4 : 0) | (MassLinked(map, c + IntVec3.West) ? 8 : 0);
+        }
+
+        internal static void AddInteriorTileWithFillers(LayerSubMesh sub, Map map, IntVec3 c, float y, Color32 color)
+        {
+            if (sub == null || map == null)
+            {
+                return;
+            }
+
+            AddQuad(sub, c.x, c.z, c.x + 1, c.z + 1, y, color, color);
+            for (int i = -1; i <= 1; i += 2)
+            {
+                for (int j = -1; j <= 1; j += 2)
+                {
+                    float num = (float)c.x + 0.5f + (float)i * 0.25f;
+                    float num2 = (float)c.z + 0.5f + (float)j * 0.25f;
+                    AddCornerQuad(sub, num - 0.25f, num2 - 0.25f, num + 0.25f, num2 + 0.25f, y + 0.03f, color);
+                }
+            }
+        }
+
+        internal static Material LedgeInteriorTileFor(Map map, ABBandMap bands, IntVec3 ledge)
+        {
+            if (!LedgeRockTile || map == null || bands == null || !bands.Banded)
+            {
+                return null;
+            }
+
+            ThingDef rockDef = GroundRockAt(map, ledge + new IntVec3(0, 0, -bands.Slot)) ?? FallbackRock(map);
+            if (!(LiveGraphicFor(rockDef) is Graphic_Linked))
+            {
+                return null;
+            }
+
+            Material material = AtlasBaseFor(rockDef);
+            return (material != null) ? MaterialAtlasPool.SubMaterialFromAtlas(material, LinkDirections.Up | LinkDirections.Right | LinkDirections.Down | LinkDirections.Left) : null;
+        }
+
+        internal static bool SouthFillerStretch = true;
+
+        internal static bool StoneBorderRule = true;
+
+        internal static bool LedgeRockTile = true;
+
     }
 }

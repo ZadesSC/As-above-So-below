@@ -325,6 +325,10 @@ namespace AsAboveSoBelow
         /// linear scan beats hashing, and Scribe_Collections handles it without ceremony.</summary>
         private List<int> openedBands = new List<int>();
 
+        // Keep the load-side list across Scribe phases. Saving uses a short-lived
+        // snapshot so the map does not retain completed jobs or despawned pawns.
+        private List<ABWormholePather.TransitRecord> transitSave;
+
         public ABBandMap(Map map) : base(map)
         {
         }
@@ -348,6 +352,29 @@ namespace AsAboveSoBelow
             // repair any cache that latched a mid-load placeholder (see RebindAfterLoad).
             ABBands.RebindAfterLoad(map, this);
             Patch_MixedBiome_ABBandBiomeAt.Forget();
+            try
+            {
+                Building_ABColumn.ReconcileCarriers(map);
+            }
+            catch (Exception error)
+            {
+                Log.Error(ABLog.Tag + " V2: carrier reconcile threw: " + error);
+            }
+
+            // Defer transit restoration until the tick after all map components are live.
+            if (Scribe.mode == LoadSaveMode.Inactive)
+            {
+                try
+                {
+                    ABWormholePather.QueueRestore(map, transitSave);
+                }
+                catch (Exception error)
+                {
+                    Log.Error(ABLog.Tag + " V2: transit restore failed: " + error);
+                }
+                transitSave = null;
+            }
+
             if (!Banded)
             {
                 return;
@@ -377,6 +404,11 @@ namespace AsAboveSoBelow
             {
                 Log.Error(ABLog.Tag + " V2: sky-sync repair threw (map left as-is): " + e);
             }
+
+#if RIMWORLD_17
+            ABPollutionCount.ClearPollutionFromInvalidTerrain(map);
+#endif
+            ABGLBiomeGridSync.Sync(map, this, "finalize-init");
 
             // Always open on the ground floor. Runs for a new colony AND for a loaded save,
             // so a save taken while looking at the sky or the basement still comes back to
@@ -537,6 +569,9 @@ namespace AsAboveSoBelow
             this.bandCount = bandCount;
             this.bandHeight = bandHeight;
             this.surfaceBand = surfaceBand;
+#if RIMWORLD_17
+            ABNativePortals.Invalidate(map);
+#endif
         }
 
         /// <summary>Drop the per-band biome memo so an abandoned map is not pinned alive by
@@ -546,11 +581,29 @@ namespace AsAboveSoBelow
             base.MapRemoved();
             Patch_MixedBiome_ABBandBiomeAt.Forget();
             ABBands.ForgetMemo();
+            ABBelowForeignLayers.ReleaseAll(map);
         }
 
         public override void ExposeData()
         {
             base.ExposeData();
+            if (Scribe.mode == LoadSaveMode.Saving)
+            {
+                List<ABWormholePather.TransitRecord> snapshot = null;
+                try
+                {
+                    snapshot = ABWormholePather.CollectForSave(map);
+                }
+                catch (Exception error)
+                {
+                    Log.Error(ABLog.Tag + " V2: transit collect threw (records not saved): " + error);
+                }
+                Scribe_Collections.Look(ref snapshot, "AB2_transits", LookMode.Deep);
+            }
+            else
+            {
+                Scribe_Collections.Look(ref transitSave, "AB2_transits", LookMode.Deep);
+            }
             Scribe_Values.Look(ref bandCount, "AB2_bandCount", 1);
             Scribe_Values.Look(ref bandHeight, "AB2_bandHeight", 0);
             Scribe_Values.Look(ref surfaceBand, "AB2_surfaceBand", 0);

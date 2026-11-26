@@ -1,3 +1,7 @@
+using System.Linq.Expressions;
+using System.Reflection.Emit;
+using System.Text;
+using UnityEngine;
 using System;
 using System.Collections.Generic;
 using System.Reflection;
@@ -74,128 +78,105 @@ namespace AsAboveSoBelow
             {
                 return;
             }
+
             resolved = true;
             try
             {
-                Type rocks = AccessTools.TypeByName(RocksPatchType);
-                setRoofsFromLandform = rocks == null
-                    ? null
-                    : AccessTools.DeclaredMethod(rocks, "SetRoofsFromLandform", new[] { typeof(Map) });
-
-                // Prepare has two overloads. We want the THREE-argument one, because it is
-                // the one that actually writes GeneratingMapSize - Prepare(Map) is a thin
-                // wrapper that resolves the tile info and seed and then calls it. Matching
-                // on argument COUNT keeps the foreign IWorldTileInfo out of our code
-                // entirely (§14: no foreign type in any signature we author).
-                Type landform = AccessTools.TypeByName(LandformType);
-                if (landform != null)
+                Type type = AccessTools.TypeByName("GeologicalLandforms.Patches.Patch_RimWorld_GenStep_RocksFromGrid");
+                setRoofsFromLandform = ((type == null) ? null : AccessTools.DeclaredMethod(type, "SetRoofsFromLandform", new Type[1] { typeof(Map) }));
+                Type type2 = AccessTools.TypeByName("GeologicalLandforms.GraphEditor.Landform");
+                if (type2 != null)
                 {
-                    foreach (MethodInfo m in landform.GetMethods(BindingFlags.Public | BindingFlags.Static))
+                    MethodInfo[] methods = type2.GetMethods(BindingFlags.Static | BindingFlags.Public);
+                    foreach (MethodInfo methodInfo in methods)
                     {
-                        if (m.Name != "Prepare")
+                        if (!(methodInfo.Name != "Prepare"))
                         {
-                            continue;
-                        }
-                        ParameterInfo[] ps = m.GetParameters();
-                        if (ps.Length == 3 && ps[1].ParameterType == typeof(IntVec2) && ps[2].ParameterType == typeof(int))
-                        {
-                            landformPrepare = m;
-                            break;
+                            ParameterInfo[] parameters = methodInfo.GetParameters();
+                            if (parameters.Length == 3 && parameters[1].ParameterType == typeof(IntVec2) && parameters[2].ParameterType == typeof(int))
+                            {
+                                landformPrepare = methodInfo;
+                                break;
+                            }
                         }
                     }
                 }
 
-                Type worker = AccessTools.TypeByName(MutatorWorkerType);
-                if (worker != null)
+                Type type3 = AccessTools.TypeByName("GeologicalLandforms.TileMutatorWorker_Landform");
+                if (type3 != null)
                 {
-                    mutatorPostElevationFertility =
-                        AccessTools.DeclaredMethod(worker, "GeneratePostElevationFertility", new[] { typeof(Map) });
-                    mutatorPostTerrain =
-                        AccessTools.DeclaredMethod(worker, "GeneratePostTerrain", new[] { typeof(Map) });
+                    mutatorPostElevationFertility = AccessTools.DeclaredMethod(type3, "GeneratePostElevationFertility", new Type[1] { typeof(Map) });
+                    mutatorPostTerrain = AccessTools.DeclaredMethod(type3, "GeneratePostTerrain", new Type[1] { typeof(Map) });
                 }
 
-                biomeGrid = AccessTools.TypeByName(BiomeGridType);
+                biomeGrid = AccessTools.TypeByName("GeologicalLandforms.BiomeGrid");
                 if (biomeGrid != null)
                 {
-                    // Both of these take and return VANILLA types only, which is why the
-                    // transplant uses them instead of the Entry-based SetEntry/EntryAt pair.
-                    biomeGridBiomeAt = AccessTools.DeclaredMethod(biomeGrid, "BiomeAt", new[] { typeof(IntVec3) });
-                    biomeGridSetBiome = AccessTools.DeclaredMethod(biomeGrid, "SetBiome", new[] { typeof(IntVec3), typeof(BiomeDef) });
+                    biomeGridBiomeAt = AccessTools.DeclaredMethod(biomeGrid, "BiomeAt", new Type[1] { typeof(IntVec3) });
+                    biomeGridSetBiome = AccessTools.DeclaredMethod(biomeGrid, "SetBiome", new Type[2] { typeof(IntVec3), typeof(BiomeDef) });
+                    biomeGridEnabled = AccessTools.DeclaredPropertyGetter(biomeGrid, "Enabled");
+                    biomeGridEntryAt = AccessTools.DeclaredMethod(biomeGrid, "EntryAt", new Type[1] { typeof(IntVec3) });
+                    MethodInfo[] methods2 = biomeGrid.GetMethods(BindingFlags.Instance | BindingFlags.Public);
+                    foreach (MethodInfo methodInfo2 in methods2)
+                    {
+                        if (!(methodInfo2.Name != "SetEntry"))
+                        {
+                            ParameterInfo[] parameters2 = methodInfo2.GetParameters();
+                            if (parameters2.Length == 2 && parameters2[0].ParameterType == typeof(IntVec3) && parameters2[1].ParameterType.IsClass && parameters2[1].ParameterType != typeof(BiomeDef))
+                            {
+                                biomeGridSetEntry = methodInfo2;
+                                break;
+                            }
+                        }
+                    }
+
                     openGroundFractionUpdate = AccessTools.DeclaredMethod(biomeGrid, "UpdateOpenGroundFraction");
-                    openGroundFractionFor = AccessTools.DeclaredMethod(biomeGrid, "GetOpenGroundFractionFor",
-                        new[] { typeof(IntVec3), typeof(bool), typeof(bool) });
+                    openGroundFractionFor = AccessTools.DeclaredMethod(biomeGrid, "GetOpenGroundFractionFor", new Type[3] { typeof(IntVec3), typeof(bool), typeof(bool) });
                     openGroundFractionProp = AccessTools.DeclaredProperty(biomeGrid, "OpenGroundFraction");
                 }
 
-                Type cellFinder = AccessTools.TypeByName(CellFinderPatchType);
-                unroofedCacheBuild = cellFinder == null
-                    ? null
-                    : AccessTools.DeclaredMethod(cellFinder, "GetOrBuildUnroofedCacheForMap", new[] { typeof(Map) });
-
-                // §56n. ApplyBuffered<T> is GENERIC, and Harmony cannot patch an open
-                // definition - each instantiation has to be closed by hand. GL uses exactly
-                // two: <float> for elevation/fertility/caves and <TerrainDef> for terrain.
-                // (Biomes do NOT come through here; they go via BiomeGrid.SetBiomes.)
-                //
-                // ⚠ The CLR shares ONE native body across all reference-type
-                // instantiations, so patching <TerrainDef> may also divert <BiomeDef> if GL
-                // ever adds one. That is harmless HERE and it is worth saying why, because
-                // the identical sharing note on TransformIntoMapSpace argues the opposite
-                // way: this prefix CLAMPS, and a clamp is idempotent, whereas that one
-                // OFFSETS and would double-apply. Shape of the operation, not the seam.
-                if (worker != null)
+                Type type4 = AccessTools.TypeByName("GeologicalLandforms.Patches.Patch_RimWorld_CellFinder");
+                unroofedCacheBuild = ((type4 == null) ? null : AccessTools.DeclaredMethod(type4, "GetOrBuildUnroofedCacheForMap", new Type[1] { typeof(Map) }));
+                if (type3 != null)
                 {
-                    MethodInfo generic = null;
-                    foreach (MethodInfo m in worker.GetMethods(BindingFlags.Instance
-                        | BindingFlags.Public | BindingFlags.NonPublic))
+                    MethodInfo methodInfo3 = null;
+                    MethodInfo[] methods3 = type3.GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                    foreach (MethodInfo methodInfo4 in methods3)
                     {
-                        if (m.Name != "ApplyBuffered" || !m.IsGenericMethodDefinition)
+                        if (!(methodInfo4.Name != "ApplyBuffered") && methodInfo4.IsGenericMethodDefinition)
                         {
-                            continue;
-                        }
-                        ParameterInfo[] ps = m.GetParameters();
-                        if (ps.Length == 3 && ps[0].ParameterType == typeof(IntVec3))
-                        {
-                            generic = m;
-                            break;
+                            ParameterInfo[] parameters3 = methodInfo4.GetParameters();
+                            if (parameters3.Length == 3 && parameters3[0].ParameterType == typeof(IntVec3))
+                            {
+                                methodInfo3 = methodInfo4;
+                                break;
+                            }
                         }
                     }
-                    if (generic != null)
+
+                    if (methodInfo3 != null)
                     {
                         try
                         {
-                            applyBufferedFloat = generic.MakeGenericMethod(typeof(float));
-                            applyBufferedTerrain = generic.MakeGenericMethod(typeof(TerrainDef));
+                            applyBufferedFloat = methodInfo3.MakeGenericMethod(typeof(float));
+                            applyBufferedTerrain = methodInfo3.MakeGenericMethod(typeof(TerrainDef));
                         }
-                        catch (Exception e)
+                        catch (Exception ex)
                         {
                             applyBufferedFloat = null;
                             applyBufferedTerrain = null;
-                            Log.WarningOnce(ABLog.Tag + " GL ApplyBuffered could not be"
-                                + " closed (" + e.Message + "); landform generation stays"
-                                + " full-column and the terrain lift stays whole-slice.",
-                                762195898);
+                            Log.WarningOnce("[As above, So below] GL ApplyBuffered could not be closed (" + ex.Message + "); landform generation stays full-column and the terrain lift stays whole-slice.", 762195898);
                         }
                     }
                 }
 
-                Type transition = AccessTools.TypeByName(BiomeTransitionType);
-                postProcessBiomeGrid = transition == null
-                    ? null
-                    : AccessTools.DeclaredMethod(transition, "PostProcessBiomeGrid", new[] { typeof(Map) });
-
-                ABLog.Dev("Geological Landforms compat: roofPass="
-                    + (setRoofsFromLandform != null ? "FOUND" : "absent")
-                    + " prepare=" + (landformPrepare != null ? "FOUND" : "absent")
-                    + " mutator=" + (mutatorPostElevationFertility != null ? "FOUND" : "absent")
-                    + " biomeGrid=" + (biomeGridSetBiome != null ? "FOUND" : "absent")
-                    + " unroofed=" + (unroofedCacheBuild != null ? "FOUND" : "absent")
-                    + " applyBuffered=" + (applyBufferedTerrain != null ? "FOUND" : "absent")
-                    + " biomeTransition=" + (postProcessBiomeGrid != null ? "FOUND" : "absent"));
+                Type type5 = AccessTools.TypeByName("GeologicalLandforms.BiomeTransition");
+                postProcessBiomeGrid = ((type5 == null) ? null : AccessTools.DeclaredMethod(type5, "PostProcessBiomeGrid", new Type[1] { typeof(Map) }));
+                ABLog.Dev("Geological Landforms compat: roofPass=" + ((setRoofsFromLandform != null) ? "FOUND" : "absent") + " prepare=" + ((landformPrepare != null) ? "FOUND" : "absent") + " mutator=" + ((mutatorPostElevationFertility != null) ? "FOUND" : "absent") + " biomeGrid=" + ((biomeGridSetBiome != null) ? "FOUND" : "absent") + " unroofed=" + ((unroofedCacheBuild != null) ? "FOUND" : "absent") + " applyBuffered=" + ((applyBufferedTerrain != null) ? "FOUND" : "absent") + " biomeTransition=" + ((postProcessBiomeGrid != null) ? "FOUND" : "absent"));
             }
-            catch (Exception e)
+            catch (Exception ex2)
             {
-                Log.ErrorOnce(ABLog.Tag + " GL compat resolve threw: " + e, 762195895);
+                Log.ErrorOnce("[As above, So below] GL compat resolve threw: " + ex2, 762195895);
             }
         }
 
@@ -698,6 +679,95 @@ namespace AsAboveSoBelow
             openGroundFractionProp.SetValue(grid, UnityEngine.Mathf.Clamp01((float)(sum / area)), null);
             return true;
         }
+        internal static bool BiomeGridEnabled(Map map)
+        {
+            Resolve();
+            if (map == null || biomeGrid == null || biomeGridEnabled == null)
+            {
+                return false;
+            }
+
+            try
+            {
+                List<MapComponent> components = map.components;
+                bool flag = default;
+                for (int i = 0; i < components.Count; i++)
+                {
+                    if (components[i] != null && biomeGrid.IsInstanceOfType(components[i]))
+                    {
+                        object obj = biomeGridEnabled.Invoke(components[i], null);
+                        int num;
+                        if (obj is bool)
+                        {
+                            flag = (bool)obj;
+                            num = 1;
+                        }
+                        else
+                        {
+                            num = 0;
+                        }
+
+                        return (byte)((uint)num & (flag ? 1u : 0u)) != 0;
+                    }
+                }
+            }
+            catch
+            {
+            }
+
+            return false;
+        }
+
+        internal static bool TryEntryAccessors(Map map, out Func<IntVec3, object> entryAt, out Action<IntVec3, object> setEntry)
+        {
+            entryAt = null;
+            setEntry = null;
+            Resolve();
+            if (map == null || biomeGrid == null || biomeGridEntryAt == null || biomeGridSetEntry == null)
+            {
+                return false;
+            }
+
+            object obj = null;
+            List<MapComponent> components = map.components;
+            for (int i = 0; i < components.Count; i++)
+            {
+                if (components[i] != null && biomeGrid.IsInstanceOfType(components[i]))
+                {
+                    obj = components[i];
+                    break;
+                }
+            }
+
+            if (obj == null)
+            {
+                return false;
+            }
+
+            try
+            {
+                Type parameterType = biomeGridSetEntry.GetParameters()[1].ParameterType;
+                ConstantExpression instance = Expression.Constant(obj, biomeGrid);
+                ParameterExpression parameterExpression = Expression.Parameter(typeof(IntVec3), "c");
+                ParameterExpression parameterExpression2 = Expression.Parameter(typeof(object), "e");
+                entryAt = Expression.Lambda<Func<IntVec3, object>>(Expression.Convert(Expression.Call(instance, biomeGridEntryAt, parameterExpression), typeof(object)), new ParameterExpression[1] { parameterExpression }).Compile();
+                setEntry = Expression.Lambda<Action<IntVec3, object>>(Expression.Call(instance, biomeGridSetEntry, parameterExpression, Expression.Convert(parameterExpression2, parameterType)), new ParameterExpression[2] { parameterExpression, parameterExpression2 }).Compile();
+                return true;
+            }
+            catch
+            {
+                entryAt = null;
+                setEntry = null;
+                return false;
+            }
+        }
+
+        private static MethodInfo biomeGridSetEntry;
+
+        private static MethodInfo biomeGridEntryAt;
+
+        private static MethodInfo biomeGridEnabled;
+
     }
 
     /// <summary>
@@ -1375,27 +1445,107 @@ namespace AsAboveSoBelow
         {
             return GeologicalLandformsCompat.PostProcessBiomeGridTarget;
         }
-
-        private static bool Prefix(Map map)
+        private static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
         {
-            try
+            MethodInfo getSize = AccessTools.DeclaredPropertyGetter(typeof(Map), "Size");
+            MethodInfo anchor = AccessTools.DeclaredMethod(typeof(Patch_GL_ABBiomeTransitionScope), "AnchorSize");
+            int swapped = 0;
+            foreach (CodeInstruction ci in instructions)
             {
-                if (!ABGuard.On(ABGuard.LevelGen) || map == null)
+                if (getSize != null && anchor != null && ci.Calls(getSize))
                 {
-                    return true;
+                    yield return new CodeInstruction(OpCodes.Call, anchor).WithLabels(ci.labels).WithBlocks(ci.blocks);
+                    swapped++;
                 }
-                if (!GeologicalLandformsCompat.TryTransplantGeometry(map, out _, out _))
+                else
                 {
-                    return true; // ordinary map - let GL smooth normally
+                    yield return ci;
                 }
-                return false;
             }
-            catch (Exception e)
+
+            sizeSwaps = swapped;
+            if (swapped == 0)
             {
-                Log.ErrorOnce(ABLog.Tag + " V2: GL biome transition scope threw: " + e, 762195900);
-                return true;
+                Log.WarningOnce("[As above, So below] GL BiomeTransition.PostProcessBiomeGrid has no Map.Size read to scope; the transition tidy runs over the whole column (correct, slower) on banded maps.", 762197002);
             }
         }
+
+        public static IntVec3 AnchorSize(Map map)
+        {
+            IntVec3 size = map.Size;
+            try
+            {
+                if (ABGuard.On(ABGuard.LevelGen) && GeologicalLandformsCompat.TryTransplantGeometry(map, out var _, out var h) && h > 0 && h < size.z)
+                {
+                    return new IntVec3(size.x, size.y, h);
+                }
+            }
+            catch
+            {
+            }
+
+            return size;
+        }
+
+        private static void Finalizer(bool __state)
+        {
+            if (__state && scopeDepth > 0 && --scopeDepth == 0)
+            {
+                ABLog.Dev("V2: GL biome transition tidy done; flood fills clamped this session: " + fillsClamped + ".");
+                scopeMap = null;
+                scopeRows = 0;
+            }
+        }
+
+        private static void Prefix(Map __0, out bool __state)
+        {
+            __state = false;
+            try
+            {
+                if (!ABGuard.On(ABGuard.LevelGen) || __0 == null || !GeologicalLandformsCompat.TryTransplantGeometry(__0, out var _, out var h) || h <= 0)
+                {
+                    return;
+                }
+
+                int num = scopeDepth++;
+                __state = true;
+                if (num == 0)
+                {
+                    scopeMap = __0;
+                    scopeRows = h;
+                    if (!reported)
+                    {
+                        reported = true;
+                        ABLog.Dev("V2: GL biome transition tidy scoped to the anchor rows (Map.Size reads swapped: " + sizeSwaps + "; clamp armed for " + h + " rows; fills clamped so far this session: " + fillsClamped + ").");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorOnce("[As above, So below] V2: GL biome transition scope threw: " + ex, 762197001);
+            }
+        }
+
+        internal static int ClampRowsFor(Map map)
+        {
+            return (scopeDepth > 0 && scopeMap == map) ? scopeRows : 0;
+        }
+
+        private static bool reported;
+
+        internal static int fillsClamped;
+
+        internal static int sizeSwaps;
+
+        [ThreadStatic]
+        private static int scopeDepth;
+
+        [ThreadStatic]
+        private static int scopeRows;
+
+        [ThreadStatic]
+        private static Map scopeMap;
+
     }
 
     /// <summary>

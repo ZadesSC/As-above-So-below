@@ -1,3 +1,9 @@
+using System.IO;
+using System.Reflection;
+using System.Text;
+using HarmonyLib;
+using UnityEngine;
+using Verse.AI.Group;
 using System;
 using System.Collections.Generic;
 using LudeonTK;
@@ -371,62 +377,53 @@ namespace AsAboveSoBelow
 
         /// <summary>Random cells of one band. Fixed seed per caller so repeat runs hit the
         /// same cells and their numbers are comparable.</summary>
-        private static List<IntVec3> SampleStandable(Map map, ABBandMap bands, int band,
-            int want, int seed)
+        private static List<IntVec3> SampleStandable(Map map, ABBandMap bands, int band, int want, int seed)
         {
-            var result = new List<IntVec3>();
-            CellRect rect = ABBands.RectOfBand(map, band);
-            var rng = new System.Random(seed);
-            int attempts = 0;
-            while (result.Count < want && attempts++ < want * 60)
+            List<IntVec3> list = new List<IntVec3>();
+            CellRect cellRect = ABBands.RectOfBand(map, band);
+            System.Random random = new System.Random(seed);
+            int num = 0;
+            while (list.Count < want && num++ < want * 60)
             {
-                var c = new IntVec3(rect.minX + rng.Next(rect.Width), 0,
-                    rect.minZ + rng.Next(rect.Height));
-                if (c.InBounds(map) && !bands.InGutter(c) && c.Standable(map))
+                IntVec3 intVec = new IntVec3(cellRect.minX + random.Next(cellRect.Width), 0, cellRect.minZ + random.Next(cellRect.Height));
+                if (intVec.InBounds(map) && !bands.InGutter(intVec) && intVec.Standable(map))
                 {
-                    result.Add(c);
+                    list.Add(intVec);
                 }
             }
-            return result;
+
+            return list;
         }
 
         /// <summary>Random cells of the band below the view, restricted to the CAMERA's
         /// column so the sections involved are in view and regenerate immediately - an
         /// out-of-view dirty section regenerates lazily (one per frame) and would smear
         /// the burst the stress is trying to produce.</summary>
-        private static List<IntVec3> SampleBelowCamera(Map map, ABBandMap bands, int viewBand,
-            int want, int seed, bool requireStandable)
+        private static List<IntVec3> SampleBelowCamera(Map map, ABBandMap bands, int viewBand, int want, int seed, bool requireStandable)
         {
-            var result = new List<IntVec3>();
+            List<IntVec3> list = new List<IntVec3>();
             int slot = bands.Slot;
-            CellRect view = Find.CameraDriver.CurrentViewRect;
-            view.ClipInsideMap(map);
-            CellRect below = view.MovedBy(new IntVec3(0, 0, -slot));
-            below.ClipInsideMap(map);
-            if (below.Width <= 0 || below.Height <= 0)
+            CellRect currentViewRect = Find.CameraDriver.CurrentViewRect;
+            currentViewRect.ClipInsideMap(map);
+            CellRect cellRect = currentViewRect.MovedBy(new IntVec3(0, 0, -slot));
+            cellRect.ClipInsideMap(map);
+            if (cellRect.Width <= 0 || cellRect.Height <= 0)
             {
-                return result;
+                return list;
             }
-            var rng = new System.Random(seed);
-            int attempts = 0;
-            while (result.Count < want && attempts++ < want * 80)
+
+            System.Random random = new System.Random(seed);
+            int num = 0;
+            while (list.Count < want && num++ < want * 80)
             {
-                var c = new IntVec3(below.minX + rng.Next(below.Width), 0,
-                    below.minZ + rng.Next(below.Height));
-                if (!c.InBounds(map) || bands.BandOf(c) != viewBand - 1 || bands.InGutter(c))
+                IntVec3 intVec = new IntVec3(cellRect.minX + random.Next(cellRect.Width), 0, cellRect.minZ + random.Next(cellRect.Height));
+                if (intVec.InBounds(map) && bands.BandOf(intVec) == viewBand - 1 && !bands.InGutter(intVec) && (!requireStandable || intVec.Standable(map)) && !list.Contains(intVec))
                 {
-                    continue;
-                }
-                if (requireStandable && !c.Standable(map))
-                {
-                    continue;
-                }
-                if (!result.Contains(c))
-                {
-                    result.Add(c);
+                    list.Add(intVec);
                 }
             }
-            return result;
+
+            return list;
         }
     }
 }
