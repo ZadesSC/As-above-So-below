@@ -171,11 +171,12 @@ namespace AsAboveSoBelow
             {
                 return false;
             }
+            PathEndMode mode = target.Walkable(map) ? PathEndMode.OnCell : PathEndMode.Touch;
             for (int i = 0; i < pawns.Count; i++)
             {
                 Pawn p = pawns[i];
                 if (p != null && p.Spawned && p.Map == map
-                    && p.CanReach(target, PathEndMode.OnCell, Danger.Deadly))
+                    && p.CanReach(target, mode, Danger.Deadly))
                 {
                     return true;
                 }

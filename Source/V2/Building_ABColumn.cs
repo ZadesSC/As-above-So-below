@@ -74,19 +74,50 @@ namespace AsAboveSoBelow
             }
             EnsureRoof();
             if (!respawningAfterLoad)
+            {
                 EnsureCarriers();
+            }
         }
 
-        internal static void RestoreCarriers(Map map)
+        internal static void ReconcileCarriers(Map map)
         {
-            // Saved carriers spawn independently of their columns. Restore missing
-            // carriers after both have loaded so spawn order cannot create duplicates.
+            var seen = new HashSet<IntVec3>();
+            var duplicates = new List<Thing>();
+            foreach (ABNetwork network in ABColumnNetworks.All)
+            {
+                if (network.carrier == null)
+                {
+                    continue;
+                }
+
+                seen.Clear();
+                foreach (Thing carrier in map.listerThings.ThingsOfDef(network.carrier))
+                {
+                    if (carrier.Spawned && !seen.Add(carrier.Position))
+                    {
+                        duplicates.Add(carrier);
+                    }
+                }
+            }
+
+            foreach (Thing duplicate in duplicates)
+            {
+                duplicate.DeSpawn();
+            }
+
+            // Snapshot the columns because spawning a carrier can change building lists.
             var columns = new List<Building_ABColumn>();
             foreach (Thing thing in map.listerThings.AllThings)
+            {
                 if (thing is Building_ABColumn column)
+                {
                     columns.Add(column);
+                }
+            }
             foreach (Building_ABColumn column in columns)
+            {
                 column.EnsureCarriers();
+            }
         }
 
         public override void DeSpawn(DestroyMode mode = DestroyMode.Vanish)
@@ -213,7 +244,7 @@ namespace AsAboveSoBelow
             }
             StringBuilder sb = new StringBuilder();
             ABBandMap bands = ABBands.CompOf(map);
-            List<Building> all = map.listerBuildings.allBuildingsColonist;
+            List<Thing> all = map.listerThings.AllThings;
             int found = 0;
             for (int i = 0; i < all.Count; i++)
             {
@@ -538,7 +569,7 @@ namespace AsAboveSoBelow
             ABBands.RebindAfterLoad(map, bands);
             try
             {
-                Building_ABColumn.RestoreCarriers(map);
+                Building_ABColumn.ReconcileCarriers(map);
             }
             catch (Exception exception)
             {
