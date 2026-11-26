@@ -1,0 +1,84 @@
+Changelog
+As above, So below II
+
+## 1.5.6 - unreleased
+
+Fixed
+- Cover works between levels. A pawn behind sandbags, walls or embrasures is protected from fire coming up from the level below or down from the level above, with the same angles and block chances as on one floor, and the hit chance tooltip lists that cover. Every shot between levels used to ignore cover completely.
+- A shooter on a lower level gets no point blank bonus against cover a storey above it. Vanilla weakens cover when the shooter stands right beside it, so a raider at the foot of your wall used to shoot past your parapet as if standing on it.
+- Pawns lean out around a wall end or a battlement gap to fire at another level, and can be hit where they lean out, as on one floor. A pawn beside a wall at the edge of a level used to be unable to shoot down and impossible to shoot back.
+- Shots between levels apply Ideology's lit and dark accuracy modifiers and the weather penalty when either end is outdoors. Both were skipped. Blind smoke now counts along the path the round actually flies.
+- AI pawns fighting an enemy on another level pick firing positions the vanilla way: behind cover facing the enemy, near their weapon's best range, away from known danger. They used to take the nearest cell with a line of fire and stand in the open.
+- AI pawns count their cover against an enemy on another level when deciding whether to hold position and keep shooting.
+- Target choice across levels follows vanilla's rules. Player turrets no longer open up on raiders in unexplored areas, EMP weapons skip flesh targets, pawns ignore lit explosives, and the pick weighs distance, cover and who is shooting at them instead of taking the nearest.
+- With Large Pawns, a big pawn shot from another level no longer counts as fully covered by the walls under the shooter's feet.
+- Blind smoke over an opening stops turrets and pawns on another level from picking a target through it, as it does on one floor.
+- Combat Extended: flak, time-fused and other bursting shells fired at another level now land there. Their launch skipped the step that moves a round onto the target's level, so they burst on the shooter's own level.
+- Combat Extended: turrets on a rooftop fire down through an opening. Their rounds used to start inside the building under the turret, above roof height, and hit that roof on the first tick. Rounds now come out of the opening the shot was aimed through.
+- Combat Extended: lasers and other instant weapons hit targets on another level. Their ray used to run along the shooter's own level.
+- Combat Extended: rounds fired between levels collide with walls and cover near the start of their flight. They used to pass through anything within about 38 cells of where they appeared.
+- Combat Extended: cover on the target's level counts against shots from another level, and pawns lean out to fire between levels, as in the vanilla fixes above. Moving targets are led again.
+- Combat Extended: hunting an animal on another level no longer freezes and closes the game. CE's hunt driver measured the distance to the animal in a straight line through the stack, so it never agreed that the hunter was close enough, and it asked for a firing position and rejected the answer until the game ran out of stack. It now measures the distance on the hunter's own level, and the hunter fires from where it stands.
+- If any other job keeps asking for a firing position on another level and rejecting the answer within one tick, the search now refuses after a few tries and the job ends. The game logs a warning naming the job.
+- Ladders, stairs and elevators placed in god mode before the first unpause connect to the other level again. The far end was treated as map scenery, moved onto the level you built on, and destroyed the end you had just placed. Utility columns placed the same way no longer lose the link to the level above.
+
+All of it works in existing saves.
+
+## 1.5.4 - 2026-09-25
+
+Fixed
+- Items kept in Adaptive Storage Framework containers were drawn a second time at their own cell when seen from a level above, on top of or beside the shelf, and ignored the container's hide-contents setting. The see-below view now leaves them to the container, which draws them the way its graphics say.
+- With Geological Landforms, every level's plants and animals were chosen from GL's biome grid, whose rows outside the surface hold the biome transition sampled out of range. Basements lost their cave biome and sky levels grew the neighbouring tile's plants. Off-surface cells now answer with their own level's biome ahead of GL, and GL's grid is rewritten to match on generation and on load, so an existing save is repaired too.
+- Biome Transitions' terrain-patch tidy pass, which stops a marsh or gravel patch being chopped along the biome line, was switched off on stacked maps. It runs again, confined to the rows it belongs to.
+- Terrain features that centre themselves on the map by half its height (valleys, mountain ridges, crevasses, mixed-biome splits, the sea half of bays, coves, fjords and coastal islands) were centred on the middle of the whole stack. With one level above and one below that is the surface, so nothing showed; with two sky levels or no basement the feature landed in a level the carve erased. They now centre on the surface level. New maps only. One known leftover: the inner ring of a coastal atoll, which jitters its centre by a random fraction of the stack, still sits off the level on those plans.
+- Plateaus jittered their centre by a fraction of the whole stack's height and often straddled a seam or missed the level. The jitter is a fraction of the level now. New maps only.
+- Rivers ran edge to edge of the whole stack rather than the level. The river itself still crossed the level, but a river island sat at the stack's midpoint, a delta split a fraction of the stack downstream and a confluence joined off the level. Their endpoints are now the level's edges. New maps only.
+- Ancient vents and other placers that keep a margin from the map edge measured it against the stack, so they could sit against a level seam. The margin is measured against the level now.
+
+Changed
+- Sky levels take the biome of the surface cell directly beneath them rather than the tile's main biome, so a mixed-biome or biome-transition split carries up to the plateau. Basements are unchanged.
+
+## 1.5.1 - 2026-09-17
+
+Fixed
+- The map setup screen called every colony an orbital start and locked the "levels below" row to none. Any scenario built on Core's base scenario declares an Orbit planet layer when Odyssey is installed, and that declaration was being read as "this colony starts in orbit". Ground colonies can pick a basement again.
+- The cell budget on that screen counted one level too few for a ground colony, so it offered per level sizes the stack could not afford. Colonies generated under the old build still got whatever basement the mod settings asked for; the screen was the part that was wrong.
+
+## 1.4.3 - 2026-09-09
+
+Fixed
+- Carriers duplicated on every save and load. A column's SpawnSetup was placing its carrier while the saved one was still being loaded, so each reload added another.
+- Vanilla-only installs could not load a save containing a power column. The carrier defs were built lazily and a save written before that reference could not resolve; they are now built at startup.
+- The first order a pawn was given after any pause was cancelled. The stuck-pawn watchdog was firing during the tick vanilla spends waiting for a path.
+- Pawns sent across a level were sometimes reported as arrived at the stairs instead of at the bed, table or workbench they were sent to.
+- Colonists judged food, chairs and the nearest of anything by straight-line distance, which is meaningless across levels. Those searches now measure the walk.
+- Pets no longer get stuck on a staircase while following a colonist, and wander back to the level the colonists are on instead of circling an empty one.
+- Neutral wild animals can use stairs and ladders. Predators, manhunters and insects still cannot.
+- Orbital colonies no longer generate a basement. Only orbital platform ground carries a level above it, so a gravship's substructure no longer projects a floor into the sky.
+- Enemy gravships and gravjumpers from Vanilla Gravship Expanded land on the colony's own level. They were picking a cell over the whole stack and could come down in the sky or the basement.
+- Cross-tile artillery from Vanilla Gravship Expanded enters and leaves at the level's edge rather than climbing through every level above.
+- In orbit the planet no longer shows a dark rectangle around the colony at night, and a level no longer has a thin dark outline when seen from above.
+- The level above no longer bleeds a strip of itself into the view when the camera is near the top or bottom of a level in orbit.
+- Gravship hull plating, substructure and bridge props are drawn when looking down at a ship from the level above, and no longer stop drawing after the game reclaims memory.
+
+Added
+- Progress Renderer support. Its timelapse photographs one level instead of the whole stack. A stacked colony is up to seven levels tall, which asked the game for an image past the size it can allocate, so the render produced nothing at all.
+- A setting for which level Progress Renderer photographs, in Mod settings under Visuals. It uses the top level by default and only appears when that mod is installed.
+
+## 1.4.2 - 2026-09-07
+
+Fixed
+- Sun & Moon Beams compat stacks sunbeams — fold defeats the host mod's camera-rect rate limiter
+- Pawns wedge permanently: pather's nextCell == the pawn's own cell (the "shaking on stairs" reports)
+- Geysers and other scatterables generated on the sky band on top of an ancient danger's roof
+- VCE chemfuel spilled by columns/risers — carrier clone inherited PipeSystem's CompSpillWhenDamaged
+
+Notes
+1.4.2
+
+## 1.4.1 - 2026-09-06
+
+- Fixed a bug with Sun and Moon Beams duplicating in intensity.
+
+Notes
+1.4.1

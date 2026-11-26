@@ -291,36 +291,29 @@ namespace AsAboveSoBelow
 
         private static TerrainDef Resolve(Map map, IntVec3 below)
         {
-            RoofDef roof = map.roofGrid.RoofAt(below);
-            if (roof != null && !roof.isNatural)
+            RoofDef roofDef = map.roofGrid.RoofAt(below);
+            bool flag = ABOrbitRules.ProjectsUpperLevel(map, below);
+            if (roofDef != null && !roofDef.isNatural)
             {
-                // A constructed roof covers its walls too - the whole footprint is one
-                // continuous surface to walk on.
-                return ABDefOf.AB_RoofSurface;
+                return flag ? ABDefOf.AB_RoofSurface : ABDefOf.AB_OpenAir;
             }
-            if (roof != null)
+
+            if (roofDef != null)
             {
-                // NATURAL roof, and it is tested BEFORE the edifice. Undug rock is an
-                // impassable edifice sitting under exactly this roof, so the other order
-                // turned every cell above unmined surface rock into a see-through ledge.
-                // Matches ABSkyBandGen's own "outside the mass" classification, which has no
-                // edifice test at all - the two resolvers have to agree or a reload silently
-                // rewrites the map into a shape generation would never have produced.
+                if (flag && ABSkyBandGen.PregenRoofOver(map, below))
+                {
+                    return ABDefOf.AB_RoofSurface;
+                }
+
                 return ABDefOf.AB_MountainTop;
             }
+
             Building edifice = below.GetEdifice(map);
-            if (edifice != null && edifice.def != null
-                && (edifice.def.passability == Traversability.Impassable
-                    || edifice.def.holdsRoof))
+            if (flag && edifice != null && edifice.def != null && (edifice.def.passability == Traversability.Impassable || edifice.def.holdsRoof))
             {
-                // An UNROOFED wall: build on it to raise the structure, but there is nothing
-                // up here to walk along. holdsRoof widens the rule to COLUMNS (§45): a
-                // column is passable at ground level, yet it is vanilla's designated
-                // support for everything overhead, so its top is buildable exactly like a
-                // wall's. WALKABLE floor above still comes the vanilla way - roof around
-                // the column below with a build-roof area and the roof rule takes over.
                 return ABDefOf.AB_WallTop;
             }
+
             return ABDefOf.AB_OpenAir;
         }
 
@@ -545,6 +538,17 @@ namespace AsAboveSoBelow
             }
             return mass + landing + backfilled;
         }
+        internal static CellRect SyncRectFor(Building ed)
+        {
+            CellRect result = ed.OccupiedRect();
+            if (ed.def == null || ed.def.mineable || (ed.def.building != null && ed.def.building.isNaturalRock))
+            {
+                return result;
+            }
+
+            return result.ExpandedBy(1);
+        }
+
     }
 
     /// <summary>Roofs: built, removed, or collapsed. SetRoof is the single writer for the
@@ -585,7 +589,7 @@ namespace AsAboveSoBelow
             {
                 if (ed != null)
                 {
-                    ABSkySync.SyncAbove(MapRef(__instance), ed.OccupiedRect());
+                    ABSkySync.SyncAbove(MapRef(__instance), ABSkySync.SyncRectFor(ed));
                 }
             }
             catch (Exception e)
@@ -610,7 +614,7 @@ namespace AsAboveSoBelow
             {
                 if (ed != null)
                 {
-                    ABSkySync.SyncAbove(MapRef(__instance), ed.OccupiedRect());
+                    ABSkySync.SyncAbove(MapRef(__instance), ABSkySync.SyncRectFor(ed));
                 }
             }
             catch (Exception e)

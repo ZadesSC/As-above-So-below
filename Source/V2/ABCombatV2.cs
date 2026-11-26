@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System;
 using HarmonyLib;
 using RimWorld;
@@ -67,24 +68,11 @@ namespace AsAboveSoBelow
         /// Returning the whole <see cref="ABShotSolution"/> rather than a bool is what lets
         /// the renderer draw the tracer through the right opening instead of guessing.
         /// </summary>
-        public static bool TrySolve(Verb verb, IntVec3 root, LocalTargetInfo targ,
-            out ABShotSolution sol, bool ignoreRange = false)
+        public static bool TrySolve(Verb verb, IntVec3 root, LocalTargetInfo targ, out ABShotSolution sol, bool ignoreRange = false)
         {
-            sol = default(ABShotSolution);
-            if (!OwnsPair(verb, root, targ))
-            {
-                return false;
-            }
-            Thing caster = verb.caster;
-            // ⚠ ignoreRange IS NOT DECORATION. Some callers ask this method purely as a line
-            // of sight test ("could I hit it from over there, range aside"), and answering
-            // with a range verdict makes those callers wrong in a way that only shows up as
-            // pawns refusing to reposition. Range is handled by passing the solver limits it
-            // cannot fail rather than by a second code path.
-            float range = ignoreRange ? float.MaxValue : verb.EffectiveRange;
-            float minRange = ignoreRange ? 0f : verb.verbProps.EffectiveMinRange(targ, caster);
-            return ABShaft.TrySolve(caster.Map, root, targ.Cell, range, minRange,
-                ABShaft.IsOverheadFire(verb), out sol);
+            IntVec3 source;
+            IntVec3 dest;
+            return TrySolve(verb, root, targ, out sol, out source, out dest, ignoreRange);
         }
 
         /// <summary>
@@ -139,6 +127,229 @@ namespace AsAboveSoBelow
             }
             return bands.BandOf(root) != bands.BandOf(targ.Cell);
         }
+        internal static void LeanCells(IntVec3 at, IntVec3 toward, Map map, List<IntVec3> outCells)
+        {
+            if (toward != at)
+            {
+                ShootLeanUtility.LeanShootingSourcesFromTo(at, toward, map, outCells);
+                return;
+            }
+
+            outCells.Clear();
+            if (tmpLeanQuadrant == null)
+            {
+                tmpLeanQuadrant = new List<IntVec3>();
+            }
+
+            for (int i = 0; i < Quadrants.Length; i++)
+            {
+                ShootLeanUtility.LeanShootingSourcesFromTo(at, at + Quadrants[i], map, tmpLeanQuadrant);
+                for (int j = 0; j < tmpLeanQuadrant.Count; j++)
+                {
+                    if (!outCells.Contains(tmpLeanQuadrant[j]))
+                    {
+                        outCells.Add(tmpLeanQuadrant[j]);
+                    }
+                }
+            }
+        }
+
+        private static bool OnBand(Map map, ABBandMap bands, IntVec3 c, int band)
+        {
+            return c.InBounds(map) && bands.BandOf(c) == band && !bands.InGutter(c);
+        }
+
+        private static void FillShootableCells(Map map, ABBandMap bands, LocalTargetInfo targ, IntVec3 shooterHere, int targBand, List<IntVec3> outCells)
+        {
+            outCells.Clear();
+            Thing thing = targ.Thing;
+            if (thing == null)
+            {
+                outCells.Add(targ.Cell);
+                return;
+            }
+
+            if (thing is Pawn)
+            {
+                LeanCells(thing.Position, shooterHere, map, tmpLean);
+                int num = tmpLean.IndexOf(thing.Position);
+                if (num > 0)
+                {
+                    outCells.Add(thing.Position);
+                }
+
+                for (int i = 0; i < tmpLean.Count; i++)
+                {
+                    IntVec3 intVec = tmpLean[i];
+                    if ((num <= 0 || i != num) && OnBand(map, bands, intVec, targBand))
+                    {
+                        outCells.Add(intVec);
+                    }
+                }
+
+                return;
+            }
+
+            outCells.Add(thing.Position);
+            if (thing.def.size.x == 1 && thing.def.size.z == 1)
+            {
+                return;
+            }
+
+            foreach (IntVec3 item in thing.OccupiedRect())
+            {
+                if (item != thing.Position && OnBand(map, bands, item, targBand))
+                {
+                    outCells.Add(item);
+                }
+            }
+        }
+
+        private static bool SolveWithLeaning(Verb verb, IntVec3 root, LocalTargetInfo targ, float range, float minRange, out ABShotSolution sol, out IntVec3 source, out IntVec3 dest)
+        {
+            sol = default;
+            source = root;
+            dest = targ.Cell;
+            Thing caster = verb.caster;
+            Map map = caster.Map;
+            ABBandMap aBBandMap = ABBands.CompOf(map);
+            if (ABShaft.IsOverheadFire(verb))
+            {
+                return ABShaft.TrySolve(map, root, targ.Cell, range, minRange, overheadFire: true, out sol);
+            }
+
+            if (!root.InBounds(map) || !targ.Cell.InBounds(map) || aBBandMap.InGutter(root) || aBBandMap.InGutter(targ.Cell))
+            {
+                return false;
+            }
+
+            int num = aBBandMap.BandOf(root);
+            int num2 = aBBandMap.BandOf(targ.Cell);
+            IntVec3 intVec = (targ.HasThing ? targ.Thing.OccupiedRect() : CellRect.SingleCell(targ.Cell)).ClosestCellTo(aBBandMap.Translate(root, num2));
+            float num3 = ABShaft.CrossBandDistance(aBBandMap, root, intVec);
+            if (num3 > range || num3 < minRange)
+            {
+                return false;
+            }
+
+            if (tmpSources == null)
+            {
+                tmpSources = new List<IntVec3>();
+                tmpLean = new List<IntVec3>();
+                tmpDests = new List<IntVec3>();
+            }
+
+            List<IntVec3> list = tmpSources;
+            list.Clear();
+            if (caster is Pawn)
+            {
+                list.Add(root);
+                LeanCells(root, aBBandMap.Translate(intVec, num), map, tmpLean);
+                for (int i = 0; i < tmpLean.Count; i++)
+                {
+                    IntVec3 intVec2 = tmpLean[i];
+                    if (intVec2 != root && OnBand(map, aBBandMap, intVec2, num) && !list.Contains(intVec2))
+                    {
+                        list.Add(intVec2);
+                    }
+                }
+            }
+            else
+            {
+                foreach (IntVec3 item in caster.OccupiedRect())
+                {
+                    if (OnBand(map, aBBandMap, item, num))
+                    {
+                        list.Add(item);
+                    }
+                }
+
+                if (list.Count == 0)
+                {
+                    list.Add(root);
+                }
+            }
+
+            bool mustCastOnOpenGround = verb.verbProps.mustCastOnOpenGround;
+            for (int j = 0; j < list.Count; j++)
+            {
+                IntVec3 intVec3 = list[j];
+                FillShootableCells(map, aBBandMap, targ, aBBandMap.Translate(intVec3, num2), num2, tmpDests);
+                for (int k = 0; k < tmpDests.Count; k++)
+                {
+                    IntVec3 intVec4 = tmpDests[k];
+                    if ((!mustCastOnOpenGround || (intVec4.Standable(map) && !map.thingGrid.CellContains(intVec4, ThingCategory.Pawn))) && ABShaft.TrySolve(map, intVec3, intVec4, float.MaxValue, 0f, overheadFire: false, out var sol2))
+                    {
+                        sol2.distance = num3;
+                        sol = sol2;
+                        source = intVec3;
+                        dest = intVec4;
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        public static bool TrySolveWithin(Verb verb, IntVec3 root, LocalTargetInfo targ, float range, float minRange, out ABShotSolution sol, out IntVec3 source, out IntVec3 dest)
+        {
+            sol = default;
+            source = root;
+            dest = targ.Cell;
+            if (!OwnsPair(verb, root, targ))
+            {
+                return false;
+            }
+
+            return SolveWithLeaning(verb, root, targ, range, minRange, out sol, out source, out dest);
+        }
+
+        public static bool TrySolveWithin(Verb verb, IntVec3 root, LocalTargetInfo targ, float range, float minRange, out ABShotSolution sol)
+        {
+            IntVec3 source;
+            IntVec3 dest;
+            return TrySolveWithin(verb, root, targ, range, minRange, out sol, out source, out dest);
+        }
+
+        public static bool TrySolve(Verb verb, IntVec3 root, LocalTargetInfo targ, out ABShotSolution sol, out IntVec3 source, out IntVec3 dest, bool ignoreRange = false)
+        {
+            sol = default;
+            source = root;
+            dest = targ.Cell;
+            if (!OwnsPair(verb, root, targ))
+            {
+                return false;
+            }
+
+            Thing caster = verb.caster;
+            float range = (ignoreRange ? float.MaxValue : verb.EffectiveRange);
+            float minRange = (ignoreRange ? 0f : verb.verbProps.EffectiveMinRange(targ, caster));
+            return SolveWithLeaning(verb, root, targ, range, minRange, out sol, out source, out dest);
+        }
+
+        private static readonly IntVec3[] Quadrants = new IntVec3[4]
+        {
+            new IntVec3(5, 0, 5),
+            new IntVec3(5, 0, -5),
+            new IntVec3(-5, 0, -5),
+            new IntVec3(-5, 0, 5)
+        };
+
+        [ThreadStatic]
+        private static List<IntVec3> tmpLeanQuadrant;
+
+        public static int leanSolves;
+
+        [ThreadStatic]
+        private static List<IntVec3> tmpDests;
+
+        [ThreadStatic]
+        private static List<IntVec3> tmpLean;
+
+        [ThreadStatic]
+        private static List<IntVec3> tmpSources;
+
     }
 
     /// <summary>
@@ -154,8 +365,7 @@ namespace AsAboveSoBelow
     [HarmonyPatch(typeof(Verb), nameof(Verb.TryFindShootLineFromTo))]
     public static class Patch_Verb_ABCrossBandShootLine
     {
-        private static bool Prefix(Verb __instance, IntVec3 root, LocalTargetInfo targ,
-            ref ShootLine resultingLine, ref bool __result, bool ignoreRange)
+        private static bool Prefix(Verb __instance, IntVec3 root, LocalTargetInfo targ, ref ShootLine resultingLine, ref bool __result, bool ignoreRange)
         {
             try
             {
@@ -163,40 +373,79 @@ namespace AsAboveSoBelow
                 {
                     return true;
                 }
-                if (ABCombatV2.TrySolve(__instance, root, targ, out ABShotSolution sol,
-                        ignoreRange))
+
+                if (ABCombatV2.TrySolve(__instance, root, targ, out var sol, out var source, out var dest, ignoreRange))
                 {
-                    // ⚠ GATED AT THE CALLER (§66b). ABV2Debug.Combat checks the toggle, but
-                    // the string CONCATENATION in its argument list runs first regardless -
-                    // and this line sits on the stance recheck (every tick per aiming pawn)
-                    // and the targeter (every frame). Ungated, it is pure GC garbage.
                     if (ABV2Debug.LogCombat)
                     {
-                        ABV2Debug.Combat("shootline OK " + __instance.caster.LabelShortCap
-                            + " " + root + " -> " + targ.Cell + " via "
-                            + (sol.overhead ? "overhead fire" : "opening " + sol.opening)
-                            + " dist " + sol.distance.ToString("0.0"));
+                        string[] array = new string[10]
+                        {
+                            "shootline OK ",
+                            __instance.caster.LabelShortCap,
+                            " ",
+                            null,
+                            null,
+                            null,
+                            null,
+                            null,
+                            null,
+                            null
+                        };
+                        IntVec3 intVec = root;
+                        array[3] = intVec.ToString();
+                        array[4] = " -> ";
+                        array[5] = targ.Cell.ToString();
+                        array[6] = " via ";
+                        string text;
+                        if (!sol.overhead)
+                        {
+                            intVec = sol.opening;
+                            text = "opening " + intVec.ToString();
+                        }
+                        else
+                        {
+                            text = "overhead fire";
+                        }
+
+                        array[7] = text;
+                        array[8] = " dist ";
+                        array[9] = sol.distance.ToString("0.0");
+                        ABV2Debug.Combat(string.Concat(array));
                     }
-                    // Park the answer for Projectile.Launch, which is handed only an origin
-                    // vector and would otherwise have to solve the geometry a second time.
+
                     ABCombatRelay.RecordSolution(__instance.caster, targ.Cell, sol);
-                    resultingLine = new ShootLine(root, targ.Cell);
+                    resultingLine = new ShootLine(source, dest);
+                    if ((source != root && __instance.caster is Pawn) || (dest != targ.Cell && targ.Thing is Pawn))
+                    {
+                        ABCombatV2.leanSolves++;
+                    }
+
                     __result = true;
                     return false;
                 }
-                // No solution, but the pair IS ours: DENY. See OwnsPair's banner - handing a
-                // cross-band pair back to vanilla lets raw distance decide, which is both
-                // more permissive and less permissive than the band rules, in different
-                // places.
+
                 if (ABCombatV2.OwnsPair(__instance, root, targ))
                 {
-                    // Same §66b gate as the OK branch: this one fires every recheck tick for
-                    // as long as a cross-band pair stays unsolvable.
                     if (ABV2Debug.LogCombat)
                     {
-                        ABV2Debug.Combat("shootline DENIED " + __instance.caster.LabelShortCap
-                            + " " + root + " -> " + targ.Cell + " (no opening in range)");
+                        string[] array2 = new string[7]
+                        {
+                            "shootline DENIED ",
+                            __instance.caster.LabelShortCap,
+                            " ",
+                            null,
+                            null,
+                            null,
+                            null
+                        };
+                        IntVec3 intVec = root;
+                        array2[3] = intVec.ToString();
+                        array2[4] = " -> ";
+                        array2[5] = targ.Cell.ToString();
+                        array2[6] = " (no opening in range)";
+                        ABV2Debug.Combat(string.Concat(array2));
                     }
+
                     resultingLine = new ShootLine(root, targ.Cell);
                     __result = false;
                     return false;
@@ -206,6 +455,7 @@ namespace AsAboveSoBelow
             {
                 ABGuard.Disable(ABGuard.Combat, e, "V2 cross-band shoot line");
             }
+
             return true;
         }
     }
