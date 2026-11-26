@@ -35,8 +35,7 @@ namespace AsAboveSoBelow
         /// IJobParallelFor over EVERY cell, on a hot per-request path". That is wrong on
         /// the second half and sent optimisation work to the wrong place twice: PathGridJob
         /// is deduped per variant per tick. The genuinely per-request map-sized cost is
-        /// calcGrid.Clear() inside PathFinderJob. Both are Burst compiled and unpatchable;
-        /// see ABPathBandScope.)
+        /// calcGrid.Clear() inside PathFinderJob.)
         ///
         /// ONLY EVER SET TRUE THROUGH THE CONFIRMATION DIALOG. The checkbox writes to a
         /// local, so the state itself encodes "the player read the warning and accepted it"
@@ -46,9 +45,7 @@ namespace AsAboveSoBelow
 
         /// <summary>Multiplier on the A* heuristic for pawns on a banded map. 1.0 is vanilla
         /// accuracy; higher searches greedily, expanding far fewer cells for a path that may
-        /// be slightly longer. See ABPathBandScope for why this is a vanilla trade rather
-        /// than a new one, and for the two pathing costs that are NOT reachable by any
-        /// patch.</summary>
+        /// be slightly longer. See ABPathBandScope for the heuristic policy.</summary>
         public float pathHeuristic = 1f;
 
         // ---- climate -------------------------------------------------------
