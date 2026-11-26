@@ -13,18 +13,33 @@ using Verse.AI;
 public sealed class PortalContinuityFixture : FixtureProvider, IFixturePersistence
 {
     private readonly WorkshopParityFixture layout = new WorkshopParityFixture();
+    private readonly bool construction;
+    public PortalContinuityFixture(bool construction = false) => this.construction = construction;
+
     public override FixtureContract Contract
     {
         get
         {
             var contract = layout.Contract;
-            contract.Id = "aasb-portal-continuity";
-            contract.Intent = "Displace a pawn during a native hold or load a real pre-native first leg";
-            contract.Interventions = contract.Interventions.Concat(new[] {
-                "assigned-goto", "short-setup-tick-advance", "explicit-touch-end-mode",
-                "same-mouth-replacement-control", "forced-crossing-animation",
-                "same-job-position-displacement", "camera-focus"
-            }).ToArray();
+            if (construction)
+            {
+                contract.Id = "aasb-portal-build-continuity";
+                contract.Intent = "Load a pre-native construction order saved during its first walking leg";
+                contract.Interventions = contract.Interventions.Concat(new[] {
+                    "supplied-fabrication-frame", "construction-skill-level", "assigned-construction-job",
+                    "short-setup-tick-advance", "camera-focus"
+                }).ToArray();
+            }
+            else
+            {
+                contract.Id = "aasb-portal-continuity";
+                contract.Intent = "Displace a pawn during a native hold or load a real pre-native first leg";
+                contract.Interventions = contract.Interventions.Concat(new[] {
+                    "assigned-goto", "short-setup-tick-advance", "explicit-touch-end-mode",
+                    "same-mouth-replacement-control", "forced-crossing-animation",
+                    "same-job-position-displacement", "camera-focus"
+                }).ToArray();
+            }
             return contract;
         }
     }
@@ -201,6 +216,126 @@ public sealed class LegacyFirstLegScenario : PortalContinuityScenario, IFixtureP
     {
         c.Check("both named pawns remained at their respective goals after the final reload",
             AtTouchGoal(c.Subject<Pawn>("legacy-walker")) && c.Subject<Pawn>("legacy-replacement").Position == approach);
+    }
+}
+
+public sealed class LegacyBuildFirstLegScenario : PortalContinuityScenario, IFixturePersistence
+{
+    private static readonly IntVec3 BuildSite = new IntVec3(70, 0, 96);
+    private Pawn builder;
+    private Frame frame;
+    private int jobId;
+    private IntVec3 startPosition;
+    private IntVec3 approach;
+    private bool restored;
+    private bool workedAtFrame;
+    private int exerciseStart = -1;
+
+    public override string Id => "aasb.pr7-legacy-build-first-leg";
+    public override FixtureProvider Fixture => new PortalContinuityFixture(construction: true);
+    public override string Intent => "Resume a real segmented ConstructFinishFrame order whose saved destination is an adjacent work cell.";
+    public string StateVersion => "1";
+
+    public override void Setup(Context c)
+    {
+        builder = c.SpawnPawn("legacy-builder", "Colonist", Start, Faction.OfPlayer);
+        builder.skills.GetSkill(SkillDefOf.Construction).Level = 16;
+        var bench = c.Def<ThingDef>("FabricationBench");
+        frame = (Frame)GenSpawn.Spawn(ThingMaker.MakeThing(bench.frameDef), BuildSite, c.Map);
+        frame.SetFaction(Faction.OfPlayer);
+        foreach (var cost in frame.TotalMaterialCost())
+        {
+            var material = ThingMaker.MakeThing(cost.thingDef);
+            material.stackCount = cost.count;
+            frame.resourceContainer.TryAdd(material, canMergeWithExistingStacks: true);
+        }
+        c.Bind("legacy-frame", frame);
+        c.Check("the upper-floor fabrication bench frame is ready to build",
+            frame.workDone == 0f && frame.TotalMaterialCost().All(cost =>
+                frame.resourceContainer.TotalStackCountOfDef(cost.thingDef) == cost.count));
+
+        var order = JobMaker.MakeJob(JobDefOf.FinishFrame, frame);
+        order.playerForced = true;
+        builder.jobs.StartJob(order, JobCondition.InterruptForced);
+        jobId = order.loadID;
+        approach = builder.pather.Destination.Cell;
+        for (int i = 0; i < 60 && builder.Position == Start; i++)
+            c.Step();
+        startPosition = builder.Position;
+
+        var records = (IEnumerable)AccessTools.Method(Transit, "CollectForSave").Invoke(null, new object[] { c.Map });
+        object record = records.Cast<object>().SingleOrDefault(item => Field<Pawn>(item, "pawn") == builder);
+        var workCell = record == null ? LocalTargetInfo.Invalid : Field<LocalTargetInfo>(record, "realDest");
+        c.Check("the vanilla build toil produced a segmented first leg with a computed work cell",
+            record != null && builder.CurJob == order && builder.jobs.curDriver is JobDriver_ConstructFinishFrame
+            && builder.jobs.curDriver.CurToilIndex == 0 && builder.pather.Moving
+            && startPosition != Start && startPosition.z < 64 && startPosition != approach
+            && builder.pather.Destination.Cell == approach && Field<IntVec3>(record, "approachCell") == approach
+            && Field<IntVec3>(record, "entryCell") != approach && !Field<bool>(record, "legTwo")
+            && order.targetA.Thing == frame && workCell.IsValid && !workCell.HasThing
+            && workCell.Cell != order.targetA.Cell
+            && workCell != order.targetB && workCell != order.targetC
+            && GenAdj.CellsAdjacent8Way(frame).Contains(workCell.Cell)
+            && Field<PathEndMode>(record, "realPeMode") == PathEndMode.OnCell,
+            new { jobId, position = startPosition.ToString(), approach = approach.ToString(),
+                frame = frame.Position.ToString(), workCell = workCell.ToString() });
+    }
+
+    public List<FixtureStateField> CaptureState(Context c) => new List<FixtureStateField>
+    {
+        new FixtureStateField { Name = "jobId", Value = jobId.ToString(CultureInfo.InvariantCulture) },
+        new FixtureStateField { Name = "approach", Value = approach.ToString() },
+        new FixtureStateField { Name = "position", Value = startPosition.ToString() }
+    };
+
+    public void RestoreState(Context c, List<FixtureStateField> state)
+    {
+        jobId = int.Parse(state.Single(f => f.Name == "jobId").Value, CultureInfo.InvariantCulture);
+        builder = c.Subject<Pawn>("legacy-builder");
+        frame = c.Subject<Frame>("legacy-frame");
+        restored = true;
+        var destination = builder.pather.Destination;
+        bool onSavedLeg = destination.Cell.ToString() == state.Single(f => f.Name == "approach").Value;
+        bool resumed = !destination.HasThing && GenAdj.CellsAdjacent8Way(frame).Contains(destination.Cell);
+        c.Check("the exact builder, unfinished frame and active movement toil loaded",
+            builder.CurJob?.loadID == jobId && builder.CurJob.targetA.Thing == frame
+            && builder.jobs.curDriver is JobDriver_ConstructFinishFrame && builder.jobs.curDriver.CurToilIndex == 0
+            && frame.Position == BuildSite && frame.workDone == 0f && builder.pather.Moving
+            && builder.Position.ToString() == state.Single(f => f.Name == "position").Value && (onSavedLeg || resumed),
+            new { jobId, onSavedLeg, resumed, position = builder.Position.ToString(), destination = destination.ToString() });
+    }
+
+    private static bool HasWorkedAtFrame(Pawn pawn, Frame site, int expectedJobId) =>
+        pawn.CurJob?.loadID == expectedJobId && pawn.CurJob.targetA.Thing == site
+        && pawn.jobs.curDriver.CurToilIndex == 1 && !pawn.pather.Moving && site.Spawned && site.workDone > 0f
+        && pawn.Position.z >= 64 && pawn.CanReachImmediate(site, PathEndMode.Touch);
+
+    public override bool AdvanceNative(Context c)
+    {
+        if (exerciseStart < 0)
+            exerciseStart = c.Tick;
+        if (!workedAtFrame && HasWorkedAtFrame(builder, frame, jobId))
+        {
+            workedAtFrame = true;
+            if (restored)
+                Capture(c, builder, "legacy-builder-working.png");
+        }
+        return (workedAtFrame || c.Tick - exerciseStart > 1200) && FinishCapture();
+    }
+
+    public override void Assert(Context c) => c.Check(
+        "the same ConstructFinishFrame order reached the upper frame and began work",
+        workedAtFrame, new { restored, jobId, currentJobId = builder.CurJob?.loadID,
+            toil = builder.jobs.curDriver?.CurToilIndex, position = builder.Position.ToString(),
+            destination = builder.pather.Destination.ToString(), frame = frame.Position.ToString(), frame.workDone });
+
+    public override void AfterReload(Context c)
+    {
+        var loadedBuilder = c.Subject<Pawn>("legacy-builder");
+        var loadedFrame = c.Subject<Frame>("legacy-frame");
+        c.Check("the same builder is still working at the same frame on the final reload",
+            !ReferenceEquals(loadedBuilder, builder) && !ReferenceEquals(loadedFrame, frame)
+            && HasWorkedAtFrame(loadedBuilder, loadedFrame, jobId));
     }
 }
 

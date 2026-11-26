@@ -1636,21 +1636,8 @@ namespace AsAboveSoBelow
 #if RIMWORLD_17
                             if (ABNativePortals.UsesNativeRouting(key))
                             {
-                                // Old saves carry no job ID. Require the saved leg and a
-                                // matching active job target before replacing the pather's
-                                // local destination with the original order.
-                                LocalTargetInfo destination = transitRecord.realDest;
-                                int remaining = transitRecord.expiresAtTick - Find.TickManager.TicksGame;
-                                if (transitRecord.near.Map == key && transitRecord.far.Map == key
-                                    && remaining > 0 && remaining <= TransitTimeoutTicks
-                                    && (!pather.Destination.HasThing || pather.Destination.Thing == transitRecord.near)
-                                    && (destination == curJob.targetA || destination == curJob.targetB
-                                        || destination == curJob.targetC)
-                                    && ABBands.SameBand(key, transitRecord.pawn.Position, transitRecord.near.Position))
-                                {
-                                    ABNativePortals.Replan(transitRecord.pawn, destination, transitRecord.realPeMode);
+                                if (TryRestoreNativeLeg(key, transitRecord, pather.Destination))
                                     num++;
-                                }
                                 continue;
                             }
 #endif
@@ -1687,6 +1674,87 @@ namespace AsAboveSoBelow
                 ABV2Debug.Transit("RESTORED " + num + " transit record(s) from the save");
             }
         }
+
+#if RIMWORLD_17
+        private static readonly FieldInfo DriverToils = AccessTools.Field(typeof(JobDriver), "toils");
+
+        private static bool TryRestoreNativeLeg(Map map, TransitRecord record, LocalTargetInfo leg)
+        {
+            Pawn pawn = record.pawn;
+            Job job = pawn.CurJob;
+            JobDriver driver = pawn.jobs.curDriver;
+            int remaining = record.expiresAtTick - Find.TickManager.TicksGame;
+            if (record.near.Map != map || record.far.Map != map
+                || remaining <= 0 || remaining > TransitTimeoutTicks
+                || (leg.HasThing && leg.Thing != record.near)
+                || !ABBands.SameBand(map, pawn.Position, record.near.Position)
+                || driver?.job != job || WantsNextToil(driver)
+                || job.startTick > record.startedTick)
+                return false;
+
+            LocalTargetInfo destination = record.realDest;
+            // Without a job ID, corroborate the saved order with the current job. A
+            // construction toil chooses an adjacent cell, which is absent from its job targets.
+            if (TryGetBuildTarget(driver, out TargetIndex index))
+            {
+                LocalTargetInfo target = job.GetTarget(index);
+                Thing thing = target.Thing;
+                if (thing == null || !thing.Spawned || thing.Map != map
+                    || record.realPeMode != PathEndMode.OnCell
+                    || (destination != target && (destination.HasThing
+                        || !IsBuildWorkCell(thing, destination.Cell))))
+                    return false;
+
+                // Use the same destination choice as vanilla GotoBuild on the loaded map.
+                destination = RCellFinder.TryFindGoodAdjacentSpotToTouch(pawn, thing, out IntVec3 workCell)
+                    ? (LocalTargetInfo)workCell
+                    : target;
+            }
+            else if (destination != job.targetA && destination != job.targetB && destination != job.targetC)
+            {
+                return false;
+            }
+
+            ABNativePortals.Replan(pawn, destination, record.realPeMode);
+            return true;
+        }
+
+        private static bool IsBuildWorkCell(Thing thing, IntVec3 cell)
+        {
+            foreach (IntVec3 adjacent in GenAdj.CellsAdjacent8Way(thing))
+            {
+                if (adjacent == cell)
+                    return true;
+            }
+            return false;
+        }
+
+        private static bool TryGetBuildTarget(JobDriver driver, out TargetIndex index)
+        {
+            index = TargetIndex.None;
+            int current = driver.CurToilIndex;
+            if (!(DriverToils?.GetValue(driver) is List<Toil> toils) || current < 0 || current >= toils.Count)
+                return false;
+
+            Toil toil = toils[current];
+            Action init = toil.initAction;
+            // Read the selected index from the stock closure. Other computed-cell toils
+            // need their own target validation. Running arbitrary init actions can change job state.
+            if (toil.defaultCompleteMode != ToilCompleteMode.PatherArrival || init == null
+                || init.GetInvocationList().Length != 1
+                || init.Method.DeclaringType?.DeclaringType != typeof(Toils_Goto)
+                || !init.Method.Name.StartsWith("<GotoBuild>", StringComparison.Ordinal))
+                return false;
+
+            if (AccessTools.Field(init.Method.DeclaringType, "ind")?.GetValue(init.Target) is TargetIndex target
+                && (target == TargetIndex.A || target == TargetIndex.B || target == TargetIndex.C))
+            {
+                index = target;
+                return true;
+            }
+            return false;
+        }
+#endif
 
         public static void QueueRestore(Map map, List<TransitRecord> records)
         {
