@@ -28,62 +28,38 @@ namespace AsAboveSoBelow
         {
             try
             {
-                // ⚠ TWO EFFECTS, ONE MATRIX, ONE PATCH. The depth cue (how far below the
-                // viewed band this pawn is) and the transit clip (is it crossing a level
-                // right now) are both a transform about the pawn's own draw root, and they
-                // must MULTIPLY. Adding a second [HarmonyPatch] on GetDrawParms to carry
-                // the second one would appear to work and would silently depend on patch
-                // order forever after.
-                //
-                // ⚠ AND THEIR GUARDS ARE NOT THE SAME. BelowDrawScale is armed only inside
-                // the see-below pass, so an early return on it would mean a pawn taking the
-                // stairs on the band you are LOOKING AT never animated at all - which is
-                // the common case.
-                float s = ABBelowDynamicDraw.BelowDrawScale;
-                if (s <= 0f)
+                if (__result.Portrait || __result.Cache)
                 {
-                    return; // falloff disabled
-                }
-                bool hasPose = ABStairAnim.TryGetPose(__result.pawn,
-                    out ABStairAnim.ClipPose pose);
-                if (!hasPose)
-                {
-                    if (s > 0.999f)
-                    {
-                        return; // nothing to do: the overwhelmingly common path
-                    }
-                    __result.matrix *= Matrix4x4.TRS(Vector3.zero, Quaternion.identity,
-                        new Vector3(s, 1f, s));
                     return;
                 }
-                // The clip HALF specifically reached a matrix this frame - the depth
-                // shrink alone must not count, or the counter reads healthy on any map
-                // with a see-below pass. Interlocked inside: worker threads (§61/§14).
+
+                float belowDrawScale = ABBelowDynamicDraw.BelowDrawScale;
+                if (belowDrawScale <= 0f)
+                {
+                    return;
+                }
+
+                if (!ABStairAnim.TryGetPose(__result.pawn, out var pose))
+                {
+                    if (!(belowDrawScale > 0.999f))
+                    {
+                        __result.matrix *= Matrix4x4.TRS(Vector3.zero, Quaternion.identity, new Vector3(belowDrawScale, 1f, belowDrawScale));
+                    }
+
+                    return;
+                }
+
                 ABStairAnim.NoteAnimApplied();
-                // ⚠ THE SECOND CHANNEL, AND IT SAT UNUSED FOR TWO WINDOWS (§77a, rule 41).
-                // PawnDrawParms.facing is a plain writable Rot4 on the struct we already
-                // have by ref. Overriding it here rather than touching pawn.Rotation means
-                // nothing that reads Rotation for GAMEPLAY - shooting, interaction spots,
-                // Pawn_RotationTracker - sees the override, and it reverts by itself the
-                // instant the clip stops applying. PawnDrawParms.ShouldRecache already
-                // compares facing, so the render cache invalidates correctly on its own.
-                if (pose.facing != ABStairAnim.FaceNone)
+                if (pose.facing != -1)
                 {
                     __result.facing = new Rot4(pose.facing);
                 }
-                // Right-multiplied: the transform happens in the pawn's LOCAL space, so it
-                // moves and scales about its own draw position and stays on its cell. A
-                // left multiply would transform the world position too and slide every
-                // below pawn towards the map origin.
-                __result.matrix *= Matrix4x4.TRS(
-                    new Vector3(pose.offX, 0f, pose.offZ),
-                    Quaternion.Euler(0f, pose.rot, 0f),
-                    new Vector3(pose.sx * s, 1f, pose.sz * s));
+
+                __result.matrix *= Matrix4x4.TRS(new Vector3(pose.offX, 0f, pose.offZ), Quaternion.Euler(0f, pose.rot, 0f), new Vector3(pose.sx * belowDrawScale, 1f, pose.sz * belowDrawScale));
             }
-            catch (Exception e)
+            catch (Exception ex)
             {
-                Log.WarningOnce(ABLog.Tag + " V2: pawn pose/shrink failed: " + e.Message,
-                    762195891);
+                Log.WarningOnce("[As above, So below] V2: pawn pose/shrink failed: " + ex.Message, 762195891);
             }
         }
     }

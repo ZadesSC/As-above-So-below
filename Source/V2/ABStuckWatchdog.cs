@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Reflection;
 using HarmonyLib;
@@ -56,6 +57,7 @@ namespace AsAboveSoBelow
             public int stillSinceTick;
             public int destChanges;
             public bool reported;
+            public bool lastMoving;
         }
 
         private static readonly Dictionary<int, Watch> watching = new Dictionary<int, Watch>();
@@ -94,84 +96,90 @@ namespace AsAboveSoBelow
         [ABGameTick(75)]
         public static void Tick()
         {
-            if (!ABV2Debug.LogTransit)
-            {
-                if (watching.Count > 0) watching.Clear();
-                return; // opt-in: this is a diagnostic, not a gameplay system
-            }
-            Map map = Find.CurrentMap;
-            if (map == null || !ABBands.Banded(map) || ABWormhole.PairCount(map) == 0)
+            int ticksGame = Find.TickManager.TicksGame;
+            if (ticksGame % 30 != 0)
             {
                 return;
             }
-            int now = Find.TickManager.TicksGame;
-            IReadOnlyList<Pawn> pawns = map.mapPawns.AllPawnsSpawned;
-            tmpDrop.Clear();
 
-            for (int i = 0; i < pawns.Count; i++)
+            Map currentMap = Find.CurrentMap;
+            if (currentMap == null || !ABBands.Banded(currentMap) || ABWormhole.PairCount(currentMap) == 0)
             {
-                Pawn p = pawns[i];
-                if (p == null || !p.Spawned || p.Dead)
+                return;
+            }
+
+            IReadOnlyList<Pawn> allPawnsSpawned = currentMap.mapPawns.AllPawnsSpawned;
+            tmpDrop.Clear();
+            for (int i = 0; i < allPawnsSpawned.Count; i++)
+            {
+                Pawn pawn = allPawnsSpawned[i];
+                if (pawn == null || !pawn.Spawned || pawn.Dead)
                 {
                     continue;
                 }
-                // Episode B is NOT a stairwell phenomenon - the pawn is stranded wherever its
-                // last leg happened to end - so the anchor filter cannot be the only gate.
-                if (!ABWormhole.NearAnyAnchor(map, p.Position, WatchRadius)
-                    && p.Faction != Faction.OfPlayer)
+
+                if (!ABWormhole.NearAnyAnchor(currentMap, pawn.Position, 8) && pawn.Faction != Faction.OfPlayer)
                 {
-                    watching.Remove(p.thingIDNumber);
+                    watching.Remove(pawn.thingIDNumber);
                     continue;
                 }
 
-                IntVec3 dest = p.pather != null && p.pather.Destination.IsValid
-                    ? p.pather.Destination.Cell
-                    : IntVec3.Invalid;
-
-                if (!watching.TryGetValue(p.thingIDNumber, out Watch w))
+                IntVec3 intVec = ((pawn.pather != null && pawn.pather.Destination.IsValid) ? pawn.pather.Destination.Cell : IntVec3.Invalid);
+                bool flag = pawn.pather != null && pawn.pather.Moving;
+                if (!watching.TryGetValue(pawn.thingIDNumber, out var value))
                 {
-                    watching[p.thingIDNumber] = new Watch
+                    watching[pawn.thingIDNumber] = new Watch
                     {
-                        lastPos = p.Position,
-                        lastDest = dest,
-                        stillSinceTick = now,
+                        lastPos = pawn.Position,
+                        lastDest = intVec,
+                        stillSinceTick = ticksGame,
                         destChanges = 0,
-                        reported = false
+                        reported = false,
+                        lastMoving = flag
                     };
                     continue;
                 }
 
-                if (dest != w.lastDest)
+                if (flag && !value.lastMoving)
                 {
-                    w.destChanges++;
-                    w.lastDest = dest;
+                    value.stillSinceTick = ticksGame;
+                    value.destChanges = 0;
+                    value.reported = false;
                 }
 
-                if (p.Position != w.lastPos)
+                value.lastMoving = flag;
+                if (intVec != value.lastDest)
                 {
-                    // Real progress: reset the episode.
-                    w.lastPos = p.Position;
-                    w.stillSinceTick = now;
-                    w.destChanges = 0;
-                    w.reported = false;
-                    watching[p.thingIDNumber] = w;
+                    value.destChanges++;
+                    value.lastDest = intVec;
+                }
+
+                if (pawn.Position != value.lastPos)
+                {
+                    value.lastPos = pawn.Position;
+                    value.stillSinceTick = ticksGame;
+                    value.destChanges = 0;
+                    value.reported = false;
+                    watching[pawn.thingIDNumber] = value;
                     continue;
                 }
 
-                bool moving = p.pather != null && p.pather.Moving;
-                if (!w.reported && now - w.stillSinceTick >= StuckTicks
-                    && (moving || WedgedOnArrival(p)))
+                bool flag2 = flag;
+                if (!value.reported && ticksGame - value.stillSinceTick >= 180 && (flag2 || WedgedOnArrival(pawn)))
                 {
-                    w.reported = true;
-                    Report(map, p, dest, now - w.stillSinceTick, w.destChanges, moving);
+                    value.reported = true;
+                    Report(currentMap, pawn, intVec, ticksGame - value.stillSinceTick, value.destChanges, flag2);
+                    TryBreakSelfStep(pawn);
                 }
-                watching[p.thingIDNumber] = w;
+
+                watching[pawn.thingIDNumber] = value;
             }
 
-            for (int i = 0; i < tmpDrop.Count; i++)
+            for (int j = 0; j < tmpDrop.Count; j++)
             {
-                watching.Remove(tmpDrop[i]);
+                watching.Remove(tmpDrop[j]);
             }
+
             tmpDrop.Clear();
         }
 
@@ -193,17 +201,17 @@ namespace AsAboveSoBelow
             return CurToilMode(p) == ToilCompleteMode.PatherArrival;
         }
 
-        private static ToilCompleteMode? CurToilMode(Pawn p)
+        internal static ToilCompleteMode? CurToilMode(Pawn p)
         {
-            JobDriver driver = p.jobs?.curDriver;
-            if (driver == null || CurToilGetter == null || p.CurJob == null
-                || driver.CurToilIndex < 0)
+            JobDriver jobDriver = p.jobs?.curDriver;
+            if (jobDriver == null || CurToilGetter == null || p.CurJob == null || jobDriver.CurToilIndex < 0)
             {
                 return null;
             }
+
             try
             {
-                return (CurToilGetter.Invoke(driver, null) as Toil)?.defaultCompleteMode;
+                return (CurToilGetter.Invoke(jobDriver, null) as Toil)?.defaultCompleteMode;
             }
             catch
             {
@@ -211,124 +219,191 @@ namespace AsAboveSoBelow
             }
         }
 
-        private static void Report(Map map, Pawn p, IntVec3 dest, int stillFor, int destChanges,
-            bool moving)
+        private static void Report(Map map, Pawn p, IntVec3 dest, int stillFor, int destChanges, bool moving)
         {
-            bool canReach = false;
-            string pathState = "no destination";
+            if (!ABV2Debug.TracingAllowed)
+            {
+                Log.WarningOnce("[As above, So below] a pawn stood still for 3+ seconds under a live pather near a level link (possibly wedged; the watchdog repairs the one wedge it can identify). For the full per-pawn diagnostic, turn on verbose logging in this mod's settings (Diagnostics tab) and reproduce - dev mode alone does not enable it.", 11229121);
+                return;
+            }
+
+            bool flag = false;
+            string text = "no destination";
             if (dest.IsValid)
             {
-                canReach = p.CanReach(dest, PathEndMode.OnCell, Danger.Deadly);
-                PawnPath path = null;
+                flag = p.CanReach(dest, PathEndMode.OnCell, Danger.Deadly);
+                PawnPath pawnPath = null;
                 try
                 {
-                    path = map.pathFinder.FindPathNow(p.Position, dest,
-                        TraverseParms.For(p), null, PathEndMode.OnCell);
-                    pathState = path != null && path.Found
-                        ? "FOUND (" + path.NodesLeftCount + " nodes)"
-                        : "NOT FOUND";
+                    pawnPath = map.pathFinder.FindPathNow(p.Position, dest, TraverseParms.For(p));
+                    text = ((pawnPath != null && pawnPath.Found) ? ("FOUND (" + pawnPath.NodesLeftCount + " nodes)") : "NOT FOUND");
                 }
                 finally
                 {
-                    if (path != null) path.ReleaseToPool();
+                    pawnPath?.ReleaseToPool();
                 }
             }
 
-            // WHAT is in the way. Without this the BLOCKED verdict names a category but not a
-            // culprit, and the culprits below need entirely different fixes.
-            //
-            // ⚠⚠ THIS USED TO ASK FOR *THE* OCCUPANT AND THAT IS WHY §89 SURVIVED FIVE
-            // SIGHTINGS (rule 71). It did `next.GetFirstPawn(map)` and then discarded the
-            // answer when it was the watched pawn itself - so for the one arrangement
-            // that actually matters, TWO PAWNS ON ONE CELL, it printed `occupant=none`
-            // and the report read as "nothing is in the way" while the pawn was, in
-            // effect, in its own way. A probe that peeks at the first entry cannot see a
-            // stack. It now COUNTS, and names every pawn including self.
-            bool selfStack = false;
-            string nextCellInfo = "n/a";
+            bool flag2 = false;
+            string text2 = "n/a";
+            IntVec3 intVec;
             if (p.pather != null)
             {
-                IntVec3 next = p.pather.nextCell;
-                selfStack = next.IsValid && next == p.Position;
-                if (next.IsValid && next.InBounds(map))
+                IntVec3 nextCell = p.pather.nextCell;
+                flag2 = nextCell.IsValid && nextCell == p.Position;
+                if (nextCell.IsValid && nextCell.InBounds(map))
                 {
-                    Building edifice = next.GetEdifice(map);
-                    Building_Door door = edifice as Building_Door;
-                    nextCellInfo = next
-                        + (selfStack ? " (== PAWN'S OWN CELL)" : string.Empty)
-                        + " walkable=" + next.Walkable(map)
-                        + " pawnsHere=" + PawnCensus(map, next, p)
-                        + " edifice=" + (edifice != null ? edifice.def.defName : "-")
-                        + (door != null
-                            ? " door[open=" + door.Open + " freePassage=" + door.FreePassage
-                              + " blockedOpenMomentary=" + door.BlockedOpenMomentary + "]"
-                            : string.Empty);
+                    Building edifice = nextCell.GetEdifice(map);
+                    Building_Door building_Door = edifice as Building_Door;
+                    string[] array = new string[9];
+                    intVec = nextCell;
+                    array[0] = intVec.ToString();
+                    array[1] = (flag2 ? " (== PAWN'S OWN CELL)" : string.Empty);
+                    array[2] = " walkable=";
+                    array[3] = nextCell.Walkable(map).ToString();
+                    array[4] = " pawnsHere=";
+                    array[5] = PawnCensus(map, nextCell, p);
+                    array[6] = " edifice=";
+                    array[7] = ((edifice != null) ? edifice.def.defName : "-");
+                    array[8] = ((building_Door != null) ? (" door[open=" + building_Door.Open + " freePassage=" + building_Door.FreePassage + " blockedOpenMomentary=" + building_Door.BlockedOpenMomentary + "]") : string.Empty);
+                    text2 = string.Concat(array);
                 }
             }
 
-            // Vanilla's verdict on the same question, straight from its own state.
-            bool collides = CollidesHere(p);
-            int gaveUpAge = UnstickGaveUpTicksAgo(p);
-            // ⚠ SAY SO WHEN THE INSTRUMENT IS DEGRADED (rule 33). Both members are
-            // private vanilla state; a rename leaves them null and this file quietly
-            // reverts to the exact wording that hid §89 for five sightings. A
-            // diagnostic that loses a sense must announce it, or the next person
-            // spends four runs trusting a verdict it can no longer support.
+            bool flag3 = CollidesHere(p);
+            int num = UnstickGaveUpTicksAgo(p);
             if (WillCollideMethod == null || FailedTicksField == null)
             {
-                Log.WarningOnce(ABLog.Tag + " V2: stuck watchdog could not bind vanilla's"
-                    + " PatherTick gates (WillCollideWithPawnAt="
-                    + (WillCollideMethod != null)
-                    + ", failedToFindCloseUnoccupiedCellTicks="
-                    + (FailedTicksField != null)
-                    + "); SELF-STACK episodes will be misreported as BLOCKED.",
-                    0x2B10C1);
+                Log.WarningOnce("[As above, So below] V2: stuck watchdog could not bind vanilla's PatherTick gates (WillCollideWithPawnAt=" + (WillCollideMethod != null) + ", failedToFindCloseUnoccupiedCellTicks=" + (FailedTicksField != null) + "); SELF-STACK episodes will be misreported as BLOCKED.", 2822337);
             }
 
-            string verdict = !moving
-                ? "FROZEN - live job on a stopped pather; its toil completes only on a pather "
-                  + "arrival that can no longer fire (teleport without re-dispatch, or a leg "
-                  + "that ended without notifying the driver). Draft/undraft would clear it."
-                : (pathState == "NOT FOUND"
-                    ? "CONNECTIVITY - region says reachable, no walkable route"
-                    : (destChanges >= 3
-                        ? "RE-TARGETING - destination changed " + destChanges + " times while standing still"
-                        : (gaveUpAge >= 0 || (collides && selfStack)
-                            ? "SELF-STACK - another STANDING pawn shares this cell. Vanilla's "
-                              + "PatherTick returns before ANY movement code while "
-                              + "TryFindBestPawnStandCell keeps failing"
-                              + (gaveUpAge >= 0
-                                  ? " (it gave up " + gaveUpAge + " ticks ago; it re-tries "
-                                    + "every 100)"
-                                  : " (collision confirmed, timestamp unreadable)")
-                              + ". NOT obstructed - co-located. Read pawnsHere: a "
-                              + "co-occupant marked `transit` makes this OURS (\u00a778's hold "
-                              + "parks a crossing pawn with StopDead for 90t, \u00a785.19 "
-                              + "queues onto the approach tile); anything else is vanilla "
-                              + "traffic and not our bug"
-                            : "BLOCKED - path exists and destination is stable, so movement "
-                              + "is obstructed")));
+            string text3;
+            if (moving)
+            {
+                if (text == "NOT FOUND")
+                {
+                    text3 = "CONNECTIVITY - region says reachable, no walkable route";
+                }
+                else if (destChanges >= 3)
+                {
+                    text3 = "RE-TARGETING - destination changed " + destChanges + " times while standing still";
+                }
+                else
+                {
+                    text3 = ((num >= 0 || (flag3 & flag2)) ? ("SELF-STACK - another STANDING pawn shares this cell. Vanilla's PatherTick returns before ANY movement code while TryFindBestPawnStandCell keeps failing" + ((num >= 0) ? (" (it gave up " + num + " ticks ago; it re-tries every 100)") : " (collision confirmed, timestamp unreadable)") + ". NOT obstructed - co-located. Read pawnsHere: a co-occupant marked `transit` makes this OURS (§78's hold parks a crossing pawn with StopDead for 90t, §85.19 queues onto the approach tile); anything else is vanilla traffic and not our bug") : "BLOCKED - path exists and destination is stable, so movement is obstructed");
+                }
+            }
+            else
+            {
+                text3 = "FROZEN - live job on a stopped pather; its toil completes only on a pather arrival that can no longer fire (teleport without re-dispatch, or a leg that ended without notifying the driver). Draft/undraft would clear it.";
+            }
 
-            // ONE self-contained message: separate Log calls from here would share a stack
-            // signature and be folded into a single class by the log monitor.
-            Log.Warning(ABLog.Tag + " V2 STUCK: " + p.LabelShortCap
-                + " at " + p.Position + " band " + ABBands.BandOf(map, p.Position)
-                + " | still for " + stillFor + " ticks"
-                + " | job=" + (p.CurJob?.def?.defName ?? "none")
-                + " | toil=" + (p.jobs?.curDriver != null ? p.jobs.curDriver.CurToilIndex : -1)
-                + "/" + (CurToilMode(p)?.ToString() ?? "unknown")
-                + " ticksLeft=" + (p.jobs?.curDriver != null ? p.jobs.curDriver.ticksLeftThisToil : -1)
-                + " | moving=" + moving
-                + " | carrying=" + (p.carryTracker?.CarriedThing?.LabelCap ?? "nothing")
-                + " | dest=" + dest + " band " + (dest.IsValid ? ABBands.BandOf(map, dest) : -1)
-                + " | CanReach=" + canReach
-                + " | path=" + pathState
-                + " | destChanges=" + destChanges
-                + " | pendingTransit=" + ABWormholePather.HasPending(p)
-                + " | nextCell=" + nextCellInfo
-                + " | collidesHere=" + collides
-                + " | unstickGaveUp=" + (gaveUpAge >= 0 ? gaveUpAge + "t ago" : "no")
-                + " | verdict=" + verdict);
+            string[] array2 = new string[55]
+            {
+                "[As above, So below] V2 STUCK: ",
+                p.LabelShortCap,
+                " at ",
+                p.Position.ToString(),
+                " band ",
+                ABBands.BandOf(map, p.Position).ToString(),
+                " | still for ",
+                stillFor.ToString(),
+                " ticks | job=",
+                p.CurJob?.def?.defName ?? "none",
+                " | toil=",
+                ((p.jobs?.curDriver != null) ? p.jobs.curDriver.CurToilIndex : (-1)).ToString(),
+                "/",
+                CurToilMode(p)?.ToString() ?? "unknown",
+                " ticksLeft=",
+                ((p.jobs?.curDriver != null) ? p.jobs.curDriver.ticksLeftThisToil : (-1)).ToString(),
+                " | moving=",
+                moving.ToString(),
+                " | carrying=",
+                p.carryTracker?.CarriedThing?.LabelCap ?? "nothing",
+                " | dest=",
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+            };
+            intVec = dest;
+            array2[21] = intVec.ToString();
+            array2[22] = " band ";
+            array2[23] = (dest.IsValid ? ABBands.BandOf(map, dest) : (-1)).ToString();
+            array2[24] = " | CanReach=";
+            array2[25] = flag.ToString();
+            array2[26] = " | path=";
+            array2[27] = text;
+            array2[28] = " | destChanges=";
+            array2[29] = destChanges.ToString();
+            array2[30] = " | pendingTransit=";
+            array2[31] = ABWormholePather.HasPending(p).ToString();
+            array2[32] = " | nextCell=";
+            array2[33] = text2;
+            array2[34] = " | busy=";
+            array2[35] = (p.stances != null && p.stances.FullBodyBusy).ToString();
+            array2[36] = " stance=";
+            array2[37] = p.stances?.curStance?.GetType().Name ?? "none";
+            array2[38] = " stunned=";
+            array2[39] = (p.stances?.stunner?.Stunned == true).ToString();
+            array2[40] = " staggered=";
+            array2[41] = (p.stances?.stagger?.Staggered == true).ToString();
+            array2[42] = ((p.stances?.stagger != null && p.stances.stagger.Staggered) ? ("(x" + p.stances.stagger.StaggerMoveSpeedFactor.ToString("0.00") + ")") : string.Empty);
+            array2[43] = " | curPath=";
+            ref string reference = ref array2[44];
+            string text4;
+            if (p.pather?.curPath == null)
+            {
+                text4 = "null";
+            }
+            else
+            {
+                text4 = (p.pather.curPath.Found ? (p.pather.curPath.NodesLeftCount + " left") : "NOT FOUND");
+            }
+
+            reference = text4;
+            array2[45] = " request=";
+            array2[46] = ((p.pather?.curPathRequest == null) ? "none" : "pending");
+            array2[47] = " cellCost=";
+            array2[48] = ((p.pather != null) ? (p.pather.nextCellCostLeft.ToString("0") + "/" + p.pather.nextCellCostTotal.ToString("0")) : "-");
+            array2[49] = " | collidesHere=";
+            array2[50] = flag3.ToString();
+            array2[51] = " | unstickGaveUp=";
+            array2[52] = ((num >= 0) ? (num + "t ago") : "no");
+            array2[53] = " | verdict=";
+            array2[54] = text3;
+            string text5 = string.Concat(array2);
+            Log.Warning(text5);
         }
 
         /// <summary>
@@ -412,5 +487,31 @@ namespace AsAboveSoBelow
                 return -1;
             }
         }
+        private static void TryBreakSelfStep(Pawn p)
+        {
+            Pawn_PathFollower pawn_PathFollower = p?.pather;
+            if (pawn_PathFollower == null || !pawn_PathFollower.Moving)
+            {
+                return;
+            }
+
+            IntVec3 nextCell = pawn_PathFollower.nextCell;
+            if (nextCell.IsValid && !(nextCell != p.Position) && pawn_PathFollower.curPathRequest == null && pawn_PathFollower.curPath == null && (p.stances == null || !p.stances.FullBodyBusy) && !CollidesHere(p))
+            {
+                Job job = p.jobs?.curJob;
+                if (job == null)
+                {
+                    pawn_PathFollower.StopDead();
+                    return;
+                }
+
+                ABV2Debug.Transit("SELF-STEP REPAIR: " + p.LabelShortCap + " at " + p.Position.ToString() + " had nextCell == its own cell while moving; ending " + (job.def?.defName ?? "job") + " to force a re-dispatch");
+                pawn_PathFollower.StopDead();
+                p.jobs.EndCurrentJob(JobCondition.InterruptForced);
+            }
+        }
+
+        private const int SweepInterval = 30;
+
     }
 }

@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using System.Reflection;
 using System;
 using System.Collections.Generic;
 using HarmonyLib;
@@ -152,6 +154,7 @@ namespace AsAboveSoBelow
             thingsPlaced = 0;
             plantsPlaced = 0;
             ABBandScope.airRejections = 0;
+            ABBandScope.roofRejections = 0;
             ABBandScope.terrainRefusedOutOfBand = 0;
             ABBandScope.terrainRefusedVoid = 0;
             ABBandScope.terrainRefusedWaterAtDrop = 0;
@@ -164,79 +167,59 @@ namespace AsAboveSoBelow
             Active = true;
             try
             {
-                // Regions are filthy after ~70k carve spawns, and several validators the
-                // scatterers use (Buildable, room checks, reachability) read them. Vanilla's
-                // own gensteps ran against clean regions; giving ours the same footing is
-                // one call, and it is the same call Map.FinalizeInit is about to make.
                 try
                 {
                     map.regionAndRoomUpdater.TryRebuildDirtyRegionsAndRooms();
                 }
-                catch (Exception e)
+                catch (Exception ex)
                 {
-                    ABLog.Dev("Band dressing: region rebuild declined (" + e.Message
-                        + "); continuing with whatever regions exist.");
+                    ABLog.Dev("Band dressing: region rebuild declined (" + ex.Message + "); continuing with whatever regions exist.");
                 }
 
-                // ⚠ COMPUTED OUTSIDE EVERY SCOPE, ON PURPOSE. This property walks
-                // map.AllCells, which ABBandScope redirects - reading it under a band scope
-                // would silently return one band's demand and make every band saturate at a
-                // seventh of the right density. Rule 47 in a new costume: a cached global is
-                // a coordinate assumption too.
-                float wholeMapDesired = 0f;
+                float num = 0f;
                 float baseDensity = 1f;
                 if (FloraParityEnabled)
                 {
                     try
                     {
                         baseDensity = map.wildPlantSpawner.CurrentPlantDensityFactor;
-                        wholeMapDesired = map.wildPlantSpawner.CurrentWholeMapNumDesiredPlants;
+                        num = map.wildPlantSpawner.CurrentWholeMapNumDesiredPlants;
                     }
-                    catch (Exception e)
+                    catch (Exception ex2)
                     {
-                        ABLog.Dev("Band dressing: plant demand unavailable (" + e.Message
-                            + "); flora parity skipped this map.");
-                        wholeMapDesired = 0f;
+                        ABLog.Dev("Band dressing: plant demand unavailable (" + ex2.Message + "); flora parity skipped this map.");
+                        num = 0f;
                     }
                 }
 
-                for (int band = 0; band < bands.bandCount; band++)
+                for (int i = 0; i < bands.bandCount; i++)
                 {
-                    if (band == bands.surfaceBand)
+                    if (i != bands.surfaceBand)
                     {
-                        continue; // the ground level was dressed by the real generation pass
-                    }
-                    CellRect rect = bands.RectOfBand(band);
-                    bool sky = band > bands.surfaceBand;
-                    var watch = System.Diagnostics.Stopwatch.StartNew();
+                        CellRect rect = bands.RectOfBand(i);
+                        bool sky = i > bands.surfaceBand;
+                        Stopwatch stopwatch = Stopwatch.StartNew();
+                        if (FeaturesEnabled)
+                        {
+                            DressFeatures(map, i, rect, sky);
+                        }
 
-                    if (FeaturesEnabled)
-                    {
-                        DressFeatures(map, band, rect, sky);
+                        if (FloraParityEnabled && num > 0f)
+                        {
+                            DressFlora(map, i, rect, sky, baseDensity, num);
+                        }
+
+                        ABGenProfile.Phase("BandDressing band " + i, stopwatch.Elapsed.TotalMilliseconds);
                     }
-                    if (FloraParityEnabled && wholeMapDesired > 0f)
-                    {
-                        DressFlora(map, band, rect, sky, baseDensity, wholeMapDesired);
-                    }
-                    ABGenProfile.Phase("BandDressing band " + band,
-                        watch.Elapsed.TotalMilliseconds);
                 }
 
-                lastSummary = stepsRun + " genstep run(s), " + ABBandMutators.workersRun
-                    + " mutator run(s), " + ABBandBiomeTerrain.cellsPainted
-                    + " biome terrain cell(s) on " + ABBandBiomeTerrain.bandsPainted
-                    + " band(s), " + thingsPlaced + " thing(s), "
-                    + plantsPlaced + " plant(s), " + ABBandScope.airRejections
-                    + " open-air cell(s) refused, terrain writes refused: "
-                    + ABBandScope.terrainRefusedVoid + " void / "
-                    + ABBandScope.terrainRefusedOutOfBand + " out-of-band / "
-                    + ABBandScope.terrainRefusedWaterAtDrop + " water-at-drop";
+                lastSummary = stepsRun + " genstep run(s), " + ABBandMutators.workersRun + " mutator run(s), " + ABBandBiomeTerrain.cellsPainted + " biome terrain cell(s) on " + ABBandBiomeTerrain.bandsPainted + " band(s), " + thingsPlaced + " thing(s), " + plantsPlaced + " plant(s), " + ABBandScope.airRejections + " open-air cell(s) refused, " + ABBandScope.roofRejections + " rooftop spawn(s) refused, terrain writes refused: " + ABBandScope.terrainRefusedVoid + " void / " + ABBandScope.terrainRefusedOutOfBand + " out-of-band / " + ABBandScope.terrainRefusedWaterAtDrop + " water-at-drop";
                 ABLog.Dev("Band dressing complete: " + lastSummary + ".");
                 ABGroundOnly.AuditBands(map, bands);
             }
-            catch (Exception e)
+            catch (Exception ex3)
             {
-                Log.Error(ABLog.Tag + " V2: band dressing failed: " + e);
+                Log.Error("[As above, So below] V2: band dressing failed: " + ex3);
             }
             finally
             {
@@ -585,13 +568,22 @@ namespace AsAboveSoBelow
                 __state = false;
             }
         }
-
-        private static void Postfix(bool __state)
+        private static Exception Finalizer(Exception __exception, bool __state)
         {
             if (__state)
             {
-                ABBandScope.Pop();
+                try
+                {
+                    ABBandScope.Pop();
+                }
+                catch (Exception ex)
+                {
+                    Log.WarningOnce("[As above, So below] V2: band scope pop threw: " + ex.Message, 11218692);
+                }
             }
+
+            return __exception;
         }
+
     }
 }

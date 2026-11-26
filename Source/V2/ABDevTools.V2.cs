@@ -1,3 +1,7 @@
+using System.IO;
+using System.Reflection;
+using Verse.AI;
+using Verse.AI.Group;
 using System;
 using System.Collections.Generic;
 using System.Text;
@@ -184,133 +188,241 @@ namespace AsAboveSoBelow
         [DebugAction("As above", "AB2: below layer report", allowedGameStates = AllowedGameStates.PlayingOnMap)]
         private static void V2BelowLayerReport()
         {
-            Map map = Find.CurrentMap;
-            if (map == null)
+            Map currentMap = Find.CurrentMap;
+            if (currentMap == null)
             {
                 return;
             }
-            IntVec3 c = UI.MouseCell();
-            if (!c.InBounds(map))
-            {
-                return;
-            }
-            StringBuilder sb = new StringBuilder();
-            sb.AppendLine("cell " + c + " band=" + ABBands.BandOf(map, c)
-                + " terrain=" + map.terrainGrid.TerrainAt(c).defName);
-            sb.AppendLine("DebugViewSettings.drawShadows=" + DebugViewSettings.drawShadows);
 
-            Section target = null;
-            foreach (Section sec in AllSectionsOf(map))
+            IntVec3 intVec = UI.MouseCell();
+            if (!intVec.InBounds(currentMap))
             {
-                if (sec.CellRect.Contains(c))
+                return;
+            }
+
+            StringBuilder stringBuilder = new StringBuilder();
+            string[] array = new string[6]
+            {
+                "cell ",
+                null,
+                null,
+                null,
+                null,
+                null
+            };
+            IntVec3 intVec2 = intVec;
+            array[1] = intVec2.ToString();
+            array[2] = " band=";
+            array[3] = ABBands.BandOf(currentMap, intVec).ToString();
+            array[4] = " terrain=";
+            array[5] = currentMap.terrainGrid.TerrainAt(intVec).defName;
+            stringBuilder.AppendLine(string.Concat(array));
+            stringBuilder.AppendLine("DebugViewSettings.drawShadows=" + DebugViewSettings.drawShadows);
+            Section section = null;
+            foreach (Section item in AllSectionsOf(currentMap))
+            {
+                if (item.CellRect.Contains(intVec))
                 {
-                    target = sec;
+                    section = item;
                     break;
                 }
             }
-            if (target == null)
+
+            if (section == null)
             {
-                sb.AppendLine("no section found for that cell");
-                Log.Warning(ABLog.Tag + " V2 below layer report:\n" + sb);
+                stringBuilder.AppendLine("no section found for that cell");
+                Log.Warning("[As above, So below] V2 below layer report:\n" + stringBuilder);
                 return;
             }
-            sb.AppendLine("section botLeft=" + target.botLeft);
-            foreach (SectionLayer layer in SectionLayersOf(target))
+
+            intVec2 = section.botLeft;
+            stringBuilder.AppendLine("section botLeft=" + intVec2.ToString());
+            foreach (SectionLayer item2 in SectionLayersOf(section))
             {
-                string name = layer.GetType().Name;
-                // "SectionLayer_AB", NOT "SectionLayer_ABBelow".
-                //
-                // The narrower prefix silently excluded SectionLayer_ABMountainCap from
-                // every report this tool has ever produced - and the cap is one of the
-                // layers that draws INTO the below view (§6a), so the instrument was blind
-                // in exactly the place the below view is most likely to be wrong. A report
-                // that omits a layer reads identically to a report proving that layer
-                // emitted nothing, which is worse than no report at all: it invites the
-                // conclusion that the cap is innocent.
-                //
-                // Found while diagnosing MO's golem formations rendering as four Better
-                // Mountains rock sprites from above; the first report came back with no cap
-                // line and nearly closed that hypothesis.
-                bool ours = name.StartsWith("SectionLayer_AB");
-                bool shadowy = name.Contains("Shadow");
-                if (!ours && !shadowy)
+                string name = item2.GetType().Name;
+                bool flag = name.StartsWith("SectionLayer_AB");
+                bool flag2 = name.Contains("Shadow");
+                if (flag || flag2)
                 {
-                    continue;
-                }
-                sb.AppendLine(name + "  visible=" + layer.Visible
-                    + "  subMeshes=" + layer.subMeshes.Count);
-                for (int i = 0; i < layer.subMeshes.Count; i++)
-                {
-                    LayerSubMesh sm = layer.subMeshes[i];
-                    string mat = sm.material != null ? sm.material.name : "null";
-                    sb.AppendLine("    [" + i + "] verts=" + sm.verts.Count
-                        + " tris=" + sm.tris.Count
-                        + " finalized=" + sm.finalized
-                        + " disabled=" + sm.disabled
-                        + " queue=" + (sm.material != null ? sm.material.renderQueue.ToString() : "?")
-                        + " mat=" + mat);
+                    stringBuilder.AppendLine(name + "  visible=" + item2.Visible + ((item2 is SectionLayer_ABRockRootFill) ? ("  enabled=" + SectionLayer_ABRockRootFill.Enabled) : "") + "  subMeshes=" + item2.subMeshes.Count);
+                    for (int i = 0; i < item2.subMeshes.Count; i++)
+                    {
+                        LayerSubMesh layerSubMesh = item2.subMeshes[i];
+                        string text = ((layerSubMesh.material != null) ? layerSubMesh.material.name : "null");
+                        stringBuilder.AppendLine("    [" + i + "] verts=" + layerSubMesh.verts.Count + " tris=" + layerSubMesh.tris.Count + " finalized=" + layerSubMesh.finalized + " disabled=" + layerSubMesh.disabled + " queue=" + ((layerSubMesh.material != null) ? layerSubMesh.material.renderQueue.ToString() : "?") + " mat=" + text);
+                    }
                 }
             }
-            Log.Warning(ABLog.Tag + " V2 below layer report:\n" + sb);
-            Messages.Message("AB2: below layer report written to log.",
-                MessageTypeDefOf.TaskCompletion, false);
+
+            Log.Warning("[As above, So below] V2 below layer report:\n" + stringBuilder);
+            Messages.Message("AB2: below layer report written to log.", MessageTypeDefOf.TaskCompletion, historical: false);
         }
 
         [DebugAction("As above", "AB2: lighting report", allowedGameStates = AllowedGameStates.PlayingOnMap)]
         private static void V2LightingReport()
         {
-            Map map = Find.CurrentMap;
-            if (map == null)
+            Map currentMap = Find.CurrentMap;
+            if (currentMap == null)
             {
                 return;
             }
-            StringBuilder sb = new StringBuilder();
-            sb.AppendLine("banded: " + ABBands.Banded(map));
-            IntVec3 c = UI.MouseCell();
-            if (!c.InBounds(map))
+
+            StringBuilder stringBuilder = new StringBuilder();
+            stringBuilder.AppendLine("banded: " + ABBands.Banded(currentMap));
+            ABBandMap aBBandMap = ABBands.CompOf(currentMap);
+            IntVec3 intVec = UI.MouseCell();
+            IntVec3 intVec2;
+            if (!intVec.InBounds(currentMap))
             {
-                Log.Warning(ABLog.Tag + " V2 lighting report:\n" + sb);
-                return;
-            }
-            ABBandMap b = ABBands.CompOf(map);
-            sb.AppendLine("cell " + c + " band=" + ABBands.BandOf(map, c)
-                + " level=" + ABBands.LevelOf(map, c)
-                + " terrain=" + map.terrainGrid.TerrainAt(c).defName);
-            sb.AppendLine("  glow here: " + map.glowGrid.VisualGlowAt(c));
-            if (b != null && b.Banded)
-            {
-                IntVec3 below = new IntVec3(c.x, 0, c.z - b.Slot);
-                if (below.InBounds(map))
+                intVec = FindProbeCell(currentMap, aBBandMap);
+                intVec2 = intVec;
+                stringBuilder.AppendLine("(mouse off map; probing " + intVec2.ToString() + " on the viewed level)");
+                if (!intVec.InBounds(currentMap))
                 {
-                    sb.AppendLine("  below " + below + " terrain="
-                        + map.terrainGrid.TerrainAt(below).defName
-                        + " fogged=" + map.fogGrid.IsFogged(below));
-                    sb.AppendLine("  glow below: " + map.glowGrid.VisualGlowAt(below));
+                    Log.Warning("[As above, So below] V2 lighting report:\n" + stringBuilder);
+                    return;
                 }
             }
-            // The decisive number: if vanilla's overlay is still Visible on a banded map,
-            // below content is being darkened twice.
-            int vanillaVisible = 0;
-            int oursVisible = 0;
-            foreach (Section sec in AllSectionsOf(map))
+
+            string[] array = new string[10]
             {
-                foreach (SectionLayer layer in SectionLayersOf(sec))
+                "cell ",
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+            };
+            intVec2 = intVec;
+            array[1] = intVec2.ToString();
+            array[2] = " band=";
+            array[3] = ABBands.BandOf(currentMap, intVec).ToString();
+            array[4] = " level=";
+            array[5] = ABBands.LevelOf(currentMap, intVec).ToString();
+            array[6] = " terrain=";
+            array[7] = currentMap.terrainGrid.TerrainAt(intVec).defName;
+            array[8] = " roof=";
+            array[9] = currentMap.roofGrid.RoofAt(intVec)?.defName ?? "none";
+            stringBuilder.AppendLine(string.Concat(array));
+            stringBuilder.AppendLine("  glow here: " + currentMap.glowGrid.VisualGlowAt(intVec).ToString());
+            if (aBBandMap != null && aBBandMap.Banded)
+            {
+                IntVec3 intVec3 = new IntVec3(intVec.x, 0, intVec.z - aBBandMap.Slot);
+                if (intVec3.InBounds(currentMap))
                 {
-                    if (layer is SectionLayer_LightingOverlay && layer.Visible)
+                    string[] array2 = new string[10]
                     {
-                        vanillaVisible++;
+                        "  below ",
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null
+                    };
+                    intVec2 = intVec3;
+                    array2[1] = intVec2.ToString();
+                    array2[2] = " terrain=";
+                    array2[3] = currentMap.terrainGrid.TerrainAt(intVec3).defName;
+                    array2[4] = " roof=";
+                    array2[5] = currentMap.roofGrid.RoofAt(intVec3)?.defName ?? "none";
+                    array2[6] = " edifice=";
+                    array2[7] = intVec3.GetEdifice(currentMap)?.def.defName ?? "none";
+                    array2[8] = " fogged=";
+                    array2[9] = currentMap.fogGrid.IsFogged(intVec3).ToString();
+                    stringBuilder.AppendLine(string.Concat(array2));
+                    stringBuilder.AppendLine("  glow below: " + currentMap.glowGrid.VisualGlowAt(intVec3).ToString());
+                }
+
+                if (ABBands.TryResolveVisibleFrom(currentMap, aBBandMap, intVec, requireUnfogged: false, out var below, out var drop))
+                {
+                    string[] array3 = new string[10]
+                    {
+                        "  overlay source (TryResolveVisibleFrom): ",
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null
+                    };
+                    intVec2 = below;
+                    array3[1] = intVec2.ToString();
+                    array3[2] = " drop=";
+                    array3[3] = drop.ToString();
+                    array3[4] = " terrain=";
+                    array3[5] = currentMap.terrainGrid.TerrainAt(below).defName;
+                    array3[6] = " roof=";
+                    array3[7] = currentMap.roofGrid.RoofAt(below)?.defName ?? "none";
+                    array3[8] = " glow=";
+                    array3[9] = currentMap.glowGrid.VisualGlowAt(below).ToString();
+                    stringBuilder.AppendLine(string.Concat(array3));
+                }
+                else
+                {
+                    stringBuilder.AppendLine("  overlay source: the cell itself (nothing visible below)");
+                }
+
+                for (int i = 0; i < aBBandMap.bandCount; i++)
+                {
+                    int num = 0;
+                    int num2 = 0;
+                    int num3 = 0;
+                    foreach (IntVec3 item in aBBandMap.RectOfBand(i))
+                    {
+                        if (currentMap.roofGrid.Roofed(item))
+                        {
+                            num++;
+                        }
+
+                        TerrainDef terrainDef = currentMap.terrainGrid.TerrainAt(item);
+                        if (terrainDef != null && terrainDef.exposesToVacuum)
+                        {
+                            num2++;
+                        }
+
+                        if (ABBands.ShowsBelow(terrainDef))
+                        {
+                            num3++;
+                        }
                     }
-                    else if (layer is SectionLayer_ABBelowLighting && layer.Visible)
+
+                    stringBuilder.AppendLine("  band " + i + ": roofed=" + num + " vacuum=" + num2 + " seeThrough=" + num3 + " of " + aBBandMap.RectOfBand(i).Area);
+                }
+            }
+
+            int num4 = 0;
+            int num5 = 0;
+            foreach (Section item2 in AllSectionsOf(currentMap))
+            {
+                foreach (SectionLayer item3 in SectionLayersOf(item2))
+                {
+                    if (item3 is SectionLayer_LightingOverlay && item3.Visible)
                     {
-                        oursVisible++;
+                        num4++;
+                    }
+                    else if (item3 is SectionLayer_ABBelowLighting && item3.Visible)
+                    {
+                        num5++;
                     }
                 }
             }
-            sb.AppendLine("vanilla lighting layers still visible: " + vanillaVisible
-                + "  (MUST be 0 on a banded map)");
-            sb.AppendLine("AB below-lighting layers visible: " + oursVisible);
-            Log.Warning(ABLog.Tag + " V2 lighting report:\n" + sb);
-            Messages.Message("AB2: lighting report written to log.", MessageTypeDefOf.TaskCompletion, false);
+
+            stringBuilder.AppendLine("vanilla lighting layers still visible: " + num4 + "  (MUST be 0 on a banded map)");
+            stringBuilder.AppendLine("AB below-lighting layers visible: " + num5);
+            AppendOverlayForensics(currentMap, intVec, stringBuilder);
+            Log.Warning("[As above, So below] V2 lighting report:\n" + stringBuilder);
+            Messages.Message("AB2: lighting report written to log.", MessageTypeDefOf.TaskCompletion, historical: false);
         }
 
         private static IEnumerable<Section> AllSectionsOf(Map map)
@@ -404,34 +516,47 @@ namespace AsAboveSoBelow
 
         private static void V2PlaceStairs(string defName)
         {
-            Map map = Find.CurrentMap;
-            if (map == null)
+            Map currentMap = Find.CurrentMap;
+            if (currentMap == null)
             {
                 return;
             }
-            IntVec3 cell = UI.MouseCell();
-            if (!cell.InBounds(map))
+
+            IntVec3 intVec = UI.MouseCell();
+            if (!intVec.InBounds(currentMap))
             {
                 return;
             }
-            ThingDef def = DefDatabase<ThingDef>.GetNamedSilentFail(defName);
-            if (def == null)
+
+            ThingDef namedSilentFail = DefDatabase<ThingDef>.GetNamedSilentFail(defName);
+            if (namedSilentFail == null)
             {
-                Messages.Message("AB2: " + defName + " def missing.", MessageTypeDefOf.RejectInput, false);
+                Messages.Message("AB2: " + defName + " def missing.", MessageTypeDefOf.RejectInput, historical: false);
                 return;
             }
+
             try
             {
-                ClearCell(map, cell);
-                Thing t = ThingMaker.MakeThing(def, GenStuff.DefaultStuffFor(def));
-                Thing spawned = GenSpawn.Spawn(t, cell, map, WipeMode.Vanish);
-                spawned.SetFaction(Faction.OfPlayer);
-                Messages.Message("AB2: placed " + def.label + " at " + cell + ".",
-                    MessageTypeDefOf.TaskCompletion, false);
+                ClearCell(currentMap, intVec);
+                Thing thing = ThingMaker.MakeThing(namedSilentFail, GenStuff.DefaultStuffFor(namedSilentFail));
+                thing.SetFactionDirect(Faction.OfPlayer);
+                GenSpawn.Spawn(thing, intVec, currentMap);
+                string[] array = new string[5]
+                {
+                    "AB2: placed ",
+                    namedSilentFail.label,
+                    " at ",
+                    null,
+                    null
+                };
+                IntVec3 intVec2 = intVec;
+                array[3] = intVec2.ToString();
+                array[4] = ".";
+                Messages.Message(string.Concat(array), MessageTypeDefOf.TaskCompletion, historical: false);
             }
-            catch (Exception e)
+            catch (Exception ex)
             {
-                Log.Error(ABLog.Tag + " V2: stairs placement failed: " + e);
+                Log.Error("[As above, So below] V2: stairs placement failed: " + ex);
             }
         }
     }

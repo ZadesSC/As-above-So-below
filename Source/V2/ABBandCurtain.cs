@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System;
 using HarmonyLib;
 using UnityEngine;
@@ -63,34 +64,37 @@ namespace AsAboveSoBelow
 
         public static void Draw(Map map)
         {
-            // Own switch, NOT the shared Rendering one (§46): any cosmetic layer tripping
-            // Rendering used to kill the curtain with it, and a dead curtain means the
-            // neighbouring band's straddling sections show through as clickable ghosts.
             if (map == null || !ABGuard.On(ABGuard.Curtain))
             {
                 return;
             }
-            ABBandMap bands = ABBands.CompOf(map);
-            if (bands == null || !bands.Banded)
+
+            ABBandMap aBBandMap = ABBands.CompOf(map);
+            if (aBBandMap == null || !aBBandMap.Banded)
             {
                 return;
             }
-            Material mat = map.MapEdgeMaterial;
-            if (mat == null)
+
+            bool flag = ABSpaceBackdrop.HasWorldBackdrop(map);
+            if (flag && SpaceCurtainOff)
             {
                 return;
             }
-            CellRect band = bands.RectOfBand(ABBandView.CurrentBand(map));
 
-            float centreX = map.Size.x * 0.5f;
-            float width = map.Size.x + Overhang * 2f;
-
-            // Below the band: from far under the map up to the band's bottom edge.
-            DrawQuad(mat, centreX, width, -Overhang, band.minZ);
-
-            // Above the band. CellRect.maxZ is INCLUSIVE, so the band occupies world z up
-            // to maxZ + 1 - starting the quad at maxZ would shave the band's top row.
-            DrawQuad(mat, centreX, width, band.maxZ + 1, map.Size.z + Overhang);
+            Material material = (flag ? DepthCurtain : map.MapEdgeMaterial);
+            if (!(material == null))
+            {
+                CellRect cellRect = aBBandMap.RectOfBand(ABBandView.RenderBand(map));
+                float centreX = (float)map.Size.x * 0.5f;
+                float width = (float)map.Size.x + 2000f;
+                DrawQuad(material, centreX, width, -1000f, cellRect.minZ);
+                DrawQuad(material, centreX, width, cellRect.maxZ + 1, (float)map.Size.z + 1000f);
+                if (flag)
+                {
+                    DrawExteriorStamp(centreX, width, -1000f, cellRect.minZ);
+                    DrawExteriorStamp(centreX, width, cellRect.maxZ + 1, (float)map.Size.z + 1000f);
+                }
+            }
         }
 
         private static void DrawQuad(Material mat, float centreX, float width,
@@ -113,6 +117,110 @@ namespace AsAboveSoBelow
             matrix.SetTRS(pos.WithYOffset(Altitude), Quaternion.identity, scale);
             Graphics.DrawMesh(MeshPool.plane10, matrix, mat, 0, null, 0, PropertyBlock);
         }
+        private static void DrawExteriorStamp(float centreX, float width, float bottom, float top)
+        {
+            float num = top - bottom;
+            if (!(num <= 0f))
+            {
+                Mesh mesh = ZeroColourQuad;
+                if (!(mesh == null))
+                {
+                    Matrix4x4 matrix = default;
+                    matrix.SetTRS(new Vector3(centreX, StampAltitude, (bottom + top) * 0.5f), Quaternion.identity, new Vector3(width, 1f, num));
+                    Graphics.DrawMesh(mesh, matrix, MatBases.LightOverlay, ExteriorRenderLayer);
+                    Graphics.DrawMesh(mesh, matrix, MatBases.ShadowMask, ExteriorRenderLayer);
+                }
+            }
+        }
+
+        private static Mesh ZeroColourQuad
+        {
+            get
+            {
+                if (zeroColourQuad != null)
+                {
+                    return zeroColourQuad;
+                }
+
+                Mesh mesh = new Mesh
+                {
+                    name = "AB_ExteriorStamp"
+                };
+                mesh.SetVertices(new List<Vector3> { new Vector3(-0.5f, 0f, -0.5f), new Vector3(-0.5f, 0f, 0.5f), new Vector3(0.5f, 0f, 0.5f), new Vector3(0.5f, 0f, -0.5f) });
+                mesh.SetTriangles(new List<int> { 0, 1, 2, 0, 2, 3 }, 0);
+                Color32 item = new Color32(0, 0, 0, 0);
+                mesh.SetColors(new List<Color32> { item, item, item, item });
+                mesh.UploadMeshData(markNoLongerReadable: false);
+                zeroColourQuad = mesh;
+                return zeroColourQuad;
+            }
+        }
+
+        private static Material DepthCurtain
+        {
+            get
+            {
+                if (depthCurtainResolved)
+                {
+                    return depthCurtain;
+                }
+
+                depthCurtainResolved = true;
+                try
+                {
+#if RIMWORLD_17
+                    Shader shader = ShaderDatabase.SolidColor;
+#else
+                    Shader shader = Shader.Find("Hidden/Internal-Colored");
+#endif
+                    if (shader == null)
+                    {
+                        ABLog.Dev("V2 band curtain: Hidden/Internal-Colored is not in this build; space maps keep the clip-only curtain.");
+                        return null;
+                    }
+
+                    Material material = new Material(shader)
+                    {
+                        hideFlags = HideFlags.HideAndDontSave,
+                        renderQueue = 1000
+                    };
+#if RIMWORLD_17
+                    material.SetFloat("_BlendSrc", 0f);
+                    material.SetFloat("_BlendDst", 1f);
+                    material.SetFloat("_CullMode", 0f);
+                    material.SetFloat("_ZWriteMode", 1f);
+                    material.SetFloat("_ZTestMode", 4f);
+#else
+                    material.SetInt("_SrcBlend", 0);
+                    material.SetInt("_DstBlend", 1);
+                    material.SetInt("_Cull", 0);
+                    material.SetInt("_ZWrite", 1);
+                    material.SetInt("_ZTest", 8);
+#endif
+                    depthCurtain = material;
+                }
+                catch (Exception ex)
+                {
+                    ABLog.Dev("V2 band curtain: depth material failed (" + ex.Message + "); space maps keep the clip-only curtain.");
+                    depthCurtain = null;
+                }
+
+                return depthCurtain;
+            }
+        }
+
+        internal static bool SpaceCurtainOff = false;
+
+        private static Mesh zeroColourQuad;
+
+        private static readonly float StampAltitude = AltitudeLayer.WorldClipper.AltitudeFor() + 0.03658537f;
+
+        private static readonly int ExteriorRenderLayer = LayerMask.NameToLayer("GravshipExclude");
+
+        private static bool depthCurtainResolved;
+
+        private static Material depthCurtain;
+
     }
 
     /// <summary>Runs right after the map mesh, so the curtain lands over any region the

@@ -1,5 +1,7 @@
 using System;
+#if !RIMWORLD_17
 using System.Collections.Generic;
+#endif
 using System.Reflection;
 using System.Text;
 using HarmonyLib;
@@ -9,63 +11,7 @@ using Verse.AI;
 
 namespace AsAboveSoBelow
 {
-    /// <summary>
-    /// PATHING COST CONTROL ON A BANDED MAP.
-    ///
-    /// ⚠ THE THING EVERY EARLIER NOTE IN THIS PROJECT GOT WRONG. ABMapSizeLimit, ABSettings
-    /// and the schematic all say the cell budget exists because "1.6's path grid is an
-    /// IJobParallelFor over EVERY cell, on a hot per-request path". Half of that is false and
-    /// it matters, because it pointed optimisation work at the wrong place for a long time:
-    ///
-    ///  - PathGridJob is NOT per request. PathFinder dedupes it through gridJobLookup, keyed
-    ///    on MapGridRequest, so it runs once per DISTINCT VARIANT per tick and it is Burst
-    ///    compiled and parallel. A colony with four allowed areas in use pays four of these
-    ///    a tick, not one per pawn.
-    ///  - What IS per request, and map sized, is the first line of PathFinderJob.Execute:
-    ///    `calcGrid.Clear()`. CalcNode is 20 bytes, so that is a 2.9 MB memset per path
-    ///    request at 4 x 190, plus another 438 KB from PathGridDoorsBlockedJob clearing
-    ///    providerCost and blocked.
-    ///
-    /// ⚠ AND NEITHER OF THOSE IS PATCHABLE. Both jobs carry
-    /// [BurstCompile(CompileSynchronously = true)]. Burst replaces the job system's dispatch
-    /// pointer with native code, so a Harmony patch on the managed IL is dead weight and
-    /// silently does nothing. The only lever on those two costs is the total cell count,
-    /// which the budget already pulls. Do not go looking for a patch there again.
-    ///
-    /// ⚠ AND OPEN AIR IS ALREADY FREE, SO DO NOT "OPTIMISE" THE GUTTER. AB_OpenAir is
-    /// Traversability.Impassable, which puts it on the cheap branch in all three consumers:
-    /// PathGridJob.Execute writes 10000 and skips CostForCell entirely, PathFinderJob skips
-    /// it at `if (num5 >= 10000) continue` before it can ever enter the frontier, and
-    /// PathGrid.CalculatedCostAt returns 10000 on its first line. The gutter is also only 2
-    /// rows in a 128 row slot, 1.6% of cells at every tier, so a perfect elimination would be
-    /// noise. It is not the cost.
-    ///
-    /// So this file attacks the two things that ARE reachable, both of which are about
-    /// WASTED work rather than per-cell cost:
-    ///
-    ///  1. CROSS BAND REQUESTS. A path from one band to another is impossible BY
-    ///     CONSTRUCTION, because the gutter is a full width impassable row. A* does not know
-    ///     that, so it drains the entire band pocket before returning NotFound: roughly 16k
-    ///     expansions at 126 and 36k at 190, against a few hundred for an ordinary path.
-    ///     Worse, eight vanilla call sites reach this through PathFinder.FindPathNow, which
-    ///     is SYNCHRONOUS ON THE MAIN THREAD. Rejecting up front is not a behaviour change:
-    ///     the request already fails, it just fails 50 to 100 times more expensively.
-    ///
-    ///  2. WHOLE MAP DOOR AND PAWN SWEEPS. PathGridDoorsBlockedJob walks every door and
-    ///     every spawned pawn on the map, once per request. On a seven band colony six
-    ///     sevenths of those are on bands the path cannot reach.
-    ///
-    /// Plus a tuning lever (DetermineHeuristicStrength) which is neither, and is documented
-    /// on its own patch below.
-    ///
-    /// ⚠ WHY THE GUARD IS SAFE FOR FLYING PAWNS, WHICH IS THE ONE CASE THAT COULD HAVE
-    /// BROKEN IT. PathGridDef Flying does not make impassable terrain walkable outright; it
-    /// exempts only terrain with forcePassableByFlyingPawns=true (see the first branch of
-    /// PathGrid.CalculatedCostAt). AB_OpenAir does not set that field, so the flying grid
-    /// scores the gutter 10000 exactly like the normal grid, and a flying pawn cannot cross
-    /// a band either. If AB_OpenAir ever gains forcePassableByFlyingPawns, THIS GUARD MUST
-    /// GAIN A def.flying EXEMPTION or flying pawns stop pathing between levels.
-    /// </summary>
+    /// <summary>Cross-band request guards for segmented routing, pathing diagnostics and heuristic tuning.</summary>
     public static class ABPathBandScope
     {
         // ---- diagnostics ----------------------------------------------------
@@ -81,6 +27,7 @@ namespace AsAboveSoBelow
 
         public static int guardCalls;
 
+#if !RIMWORLD_17
         public static int filterCalls;
 
         public static long doorsKept;
@@ -94,6 +41,7 @@ namespace AsAboveSoBelow
         public static long providersKept;
 
         public static long providersDropped;
+#endif
 
         public static string lastReject = "none yet";
 
@@ -102,6 +50,7 @@ namespace AsAboveSoBelow
             rejectedSync = 0;
             rejectedAsync = 0;
             guardCalls = 0;
+#if !RIMWORLD_17
             filterCalls = 0;
             doorsKept = 0;
             doorsDropped = 0;
@@ -109,6 +58,7 @@ namespace AsAboveSoBelow
             pawnsDropped = 0;
             providersKept = 0;
             providersDropped = 0;
+#endif
             lastReject = "none yet";
             ABPerfStats.ResetPath();
         }
@@ -121,6 +71,7 @@ namespace AsAboveSoBelow
                 + rejectedSync + " rejected sync (FindPathNow), "
                 + rejectedAsync + " rejected async (PushRequest)");
             sb.AppendLine("  last rejection: " + lastReject);
+#if !RIMWORLD_17
             sb.AppendLine("  door/pawn band filter: " + filterCalls + " requests scoped");
             sb.AppendLine("    doors     kept " + doorsKept + " dropped " + doorsDropped
                 + Share(doorsKept, doorsDropped));
@@ -128,6 +79,7 @@ namespace AsAboveSoBelow
                 + Share(pawnsKept, pawnsDropped));
             sb.AppendLine("    providers kept " + providersKept + " dropped " + providersDropped
                 + Share(providersKept, providersDropped));
+#endif
             sb.AppendLine("  heuristic multiplier: " + HeuristicBoost().ToString("0.00")
                 + (Mathf.Approximately(HeuristicBoost(), 1f) ? " (off, vanilla accuracy)" : "")
                 + "; transit-leg floor " + TransitLegHeuristic.ToString("0.00"));
@@ -142,11 +94,13 @@ namespace AsAboveSoBelow
             return sb.ToString();
         }
 
+#if !RIMWORLD_17
         private static string Share(long kept, long dropped)
         {
             long total = kept + dropped;
             return total == 0 ? "" : "  (" + (100f * dropped / total).ToString("0.0") + "% skipped)";
         }
+#endif
 
         internal static float HeuristicBoost()
         {
@@ -175,57 +129,8 @@ namespace AsAboveSoBelow
         /// </summary>
         public const float TransitLegHeuristic = 1.35f;
 
-        // ---- the cross band test --------------------------------------------
-
-        /// <summary>
-        /// True when this request can never produce a path because start and destination sit
-        /// in different bands.
-        ///
-        /// ⚠ EVERY EARLY RETURN HERE IS "LET VANILLA HANDLE IT", NEVER "REJECT". A guard that
-        /// is wrong in the permissive direction costs a slow path; wrong in the other
-        /// direction it silently strands a pawn, and that failure mode looks exactly like the
-        /// three unrelated stairwell bugs already recorded on ABWormholePather. So:
-        ///
-        ///  - Not banded, which includes EVERY MAP DURING GENERATION (⚠ ABBands.Banded is
-        ///    FALSE while gensteps run): permit. This is load bearing for GenStep_Roads,
-        ///    which calls FindPathNow across the whole stack and must not be interfered with.
-        ///  - Either endpoint out of bounds or invalid: permit.
-        ///  - Either endpoint IN THE GUTTER: permit. BandOf has to return some band for a
-        ///    gutter cell, and which side it picks is an implementation detail we must not
-        ///    build a rejection on. A destination on a band edge reached with
-        ///    PathEndMode.Touch is the realistic case.
-        /// </summary>
-        internal static bool CrossBand(Map map, IntVec3 start, LocalTargetInfo target, out string why)
-        {
-            why = null;
-            if (map == null || !ABBands.Banded(map))
-            {
-                return false;
-            }
-            guardCalls++;
-            if (!target.IsValid)
-            {
-                return false;
-            }
-            IntVec3 dest = target.Cell;
-            if (!start.IsValid || !start.InBounds(map) || !dest.IsValid || !dest.InBounds(map))
-            {
-                return false;
-            }
-            if (ABBands.InGutter(map, start) || ABBands.InGutter(map, dest))
-            {
-                return false;
-            }
-            if (ABBands.SameBand(map, start, dest))
-            {
-                return false;
-            }
-            why = start + " band " + ABBands.BandOf(map, start)
-                + " -> " + dest + " band " + ABBands.BandOf(map, dest);
-            return true;
-        }
-
-        // ---- per band door / pawn / provider buckets -------------------------
+#if !RIMWORLD_17
+        // Legacy 1.6 worker inputs for segmented routing.
         //
         // ⚠ WHY REUSING THE LISTS IS SAFE, AND WHAT WOULD MAKE IT UNSAFE. These lists are
         // handed to PathGridDoorsBlockedJob, which runs on a WORKER THREAD. Refilling a list
@@ -250,24 +155,23 @@ namespace AsAboveSoBelow
 
         private static List<IPathFindCostProvider>[] providersByBand;
 
-        private static void EnsureBuckets(Map map, IReadOnlyList<Thing> doors,
-            IReadOnlyList<Pawn> pawns, IReadOnlyList<IPathFindCostProvider> providers)
+        private static void EnsureBuckets(Map map, IReadOnlyList<Thing> doors, IReadOnlyList<Pawn> pawns, IReadOnlyList<IPathFindCostProvider> providers)
         {
-            int tick = Find.TickManager != null ? Find.TickManager.TicksGame : 0;
-            if (bucketMap == map && bucketTick == tick)
+            int num = ((Find.TickManager != null) ? Find.TickManager.TicksGame : 0);
+            if (bucketMap == map && bucketTick == num)
             {
                 return;
             }
-            bucketMap = map;
-            bucketTick = tick;
 
-            int bands = Mathf.Max(1, ABBands.BandCount(map));
-            if (doorsByBand == null || doorsByBand.Length != bands)
+            bucketMap = map;
+            bucketTick = num;
+            int num2 = Mathf.Max(1, ABBands.BandCount(map));
+            if (doorsByBand == null || doorsByBand.Length != num2)
             {
-                doorsByBand = new List<Thing>[bands];
-                pawnsByBand = new List<Pawn>[bands];
-                providersByBand = new List<IPathFindCostProvider>[bands];
-                for (int i = 0; i < bands; i++)
+                doorsByBand = new List<Thing>[num2];
+                pawnsByBand = new List<Pawn>[num2];
+                providersByBand = new List<IPathFindCostProvider>[num2];
+                for (int i = 0; i < num2; i++)
                 {
                     doorsByBand[i] = new List<Thing>();
                     pawnsByBand[i] = new List<Pawn>();
@@ -276,49 +180,64 @@ namespace AsAboveSoBelow
             }
             else
             {
-                for (int i = 0; i < bands; i++)
+                for (int j = 0; j < num2; j++)
                 {
-                    doorsByBand[i].Clear();
-                    pawnsByBand[i].Clear();
-                    providersByBand[i].Clear();
+                    doorsByBand[j].Clear();
+                    pawnsByBand[j].Clear();
+                    providersByBand[j].Clear();
                 }
             }
 
             if (doors != null)
             {
-                for (int i = 0; i < doors.Count; i++)
+                for (int k = 0; k < doors.Count; k++)
                 {
-                    Thing t = doors[i];
-                    int b = BandIndex(map, t?.Position ?? IntVec3.Invalid, bands);
-                    if (b >= 0)
+                    Thing thing = doors[k];
+                    IntVec3 intVec = thing?.Position ?? IntVec3.Invalid;
+                    if (intVec.IsValid && (ABBands.InGutter(map, intVec) || SpansSeam(map, thing)))
                     {
-                        doorsByBand[b].Add(t);
+                        for (int l = 0; l < num2; l++)
+                        {
+                            doorsByBand[l].Add(thing);
+                        }
+
+                        continue;
+                    }
+
+                    int num3 = BandIndex(map, intVec, num2);
+                    if (num3 >= 0)
+                    {
+                        doorsByBand[num3].Add(thing);
                     }
                 }
             }
+
             if (pawns != null)
             {
-                for (int i = 0; i < pawns.Count; i++)
+                for (int m = 0; m < pawns.Count; m++)
                 {
-                    Pawn p = pawns[i];
-                    int b = BandIndex(map, p?.Position ?? IntVec3.Invalid, bands);
-                    if (b >= 0)
+                    Pawn pawn = pawns[m];
+                    int num4 = BandIndex(map, pawn?.Position ?? IntVec3.Invalid, num2);
+                    if (num4 >= 0)
                     {
-                        pawnsByBand[b].Add(p);
+                        pawnsByBand[num4].Add(pawn);
                     }
                 }
             }
-            if (providers != null)
+
+            if (providers == null)
             {
-                for (int i = 0; i < providers.Count; i++)
+                return;
+            }
+
+            for (int n = 0; n < providers.Count; n++)
+            {
+                IPathFindCostProvider pathFindCostProvider = providers[n];
+                IntVec3 c = ((pathFindCostProvider is Thing thing2) ? thing2.Position : IntVec3.Invalid);
+                int num5 = BandIndex(map, c, num2);
+                if (num5 >= 0)
                 {
-                    IPathFindCostProvider p = providers[i];
-                    IntVec3 at = p is Thing t ? t.Position : IntVec3.Invalid;
-                    int b = BandIndex(map, at, bands);
-                    if (b >= 0)
-                    {
-                        providersByBand[b].Add(p);
-                    }
+                    providersByBand[num5].Add(pathFindCostProvider);
                 }
             }
         }
@@ -344,9 +263,7 @@ namespace AsAboveSoBelow
             }
             Map map = request.map;
             if (map == null || !ABBands.Banded(map))
-            {
                 return;
-            }
             int bands = Mathf.Max(1, ABBands.BandCount(map));
             if (bands < 2)
             {
@@ -379,6 +296,133 @@ namespace AsAboveSoBelow
             providersKept += job.providers.Count;
             providersDropped += wasProviders - job.providers.Count;
         }
+        private static bool SpansSeam(Map map, Thing t)
+        {
+            if (t == null || (t.def.size.x <= 1 && t.def.size.z <= 1))
+            {
+                return false;
+            }
+
+            CellRect cellRect = t.OccupiedRect();
+            int num = -1;
+            foreach (IntVec3 item in cellRect)
+            {
+                if (item.InBounds(map))
+                {
+                    if (ABBands.InGutter(map, item))
+                    {
+                        return true;
+                    }
+
+                    int num2 = ABBands.BandOf(map, item);
+                    if (num < 0)
+                    {
+                        num = num2;
+                    }
+                    else if (num2 != num)
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+#endif
+
+        // ---- the cross band test --------------------------------------------
+
+        /// <summary>
+        /// True when this request can never produce a path because start and destination sit
+        /// in different bands.
+        ///
+        /// ⚠ EVERY EARLY RETURN HERE IS "LET VANILLA HANDLE IT", NEVER "REJECT". A guard that
+        /// is wrong in the permissive direction costs a slow path; wrong in the other
+        /// direction it silently strands a pawn, and that failure mode looks exactly like the
+        /// three unrelated stairwell bugs already recorded on ABWormholePather. So:
+        ///
+        ///  - Not banded, which includes EVERY MAP DURING GENERATION (⚠ ABBands.Banded is
+        ///    FALSE while gensteps run): permit. This is load bearing for GenStep_Roads,
+        ///    which calls FindPathNow across the whole stack and must not be interfered with.
+        ///  - Either endpoint out of bounds or invalid: permit.
+        ///  - Either endpoint IN THE GUTTER: permit. BandOf has to return some band for a
+        ///    gutter cell, and which side it picks is an implementation detail we must not
+        ///    build a rejection on. A destination on a band edge reached with
+        ///    PathEndMode.Touch is the realistic case.
+        /// </summary>
+        internal static bool CrossBand(Map map, IntVec3 start, LocalTargetInfo target, PathEndMode peMode, IntVec3? exactDestination, out string why)
+        {
+            why = null;
+            if (map == null || !ABBands.Banded(map))
+            {
+                return false;
+            }
+
+            guardCalls++;
+            if (!target.IsValid)
+            {
+                return false;
+            }
+
+            IntVec3 cell = target.Cell;
+            if (!start.IsValid || !start.InBounds(map) || !cell.IsValid || !cell.InBounds(map))
+            {
+                return false;
+            }
+
+            if (ABBands.InGutter(map, start) || ABBands.InGutter(map, cell))
+            {
+                return false;
+            }
+
+            if (ABBands.SameBand(map, start, cell))
+            {
+                return false;
+            }
+
+            if (exactDestination.HasValue && exactDestination.Value.IsValid && exactDestination.Value != cell && exactDestination.Value.InBounds(map) && (ABBands.InGutter(map, exactDestination.Value) || ABBands.SameBand(map, start, exactDestination.Value)))
+            {
+                return false;
+            }
+
+            if (target.HasThing && target.Thing != null && target.Thing.Spawned)
+            {
+                Thing thing = target.Thing;
+                if (peMode == PathEndMode.InteractionCell && thing.def.hasInteractionCell)
+                {
+                    IntVec3 interactionCell = thing.InteractionCell;
+                    if (interactionCell.InBounds(map) && (ABBands.InGutter(map, interactionCell) || ABBands.SameBand(map, start, interactionCell)))
+                    {
+                        return false;
+                    }
+                }
+
+                if ((peMode == PathEndMode.Touch || peMode == PathEndMode.ClosestTouch) && (thing.def.size.x > 1 || thing.def.size.z > 1))
+                {
+                    foreach (IntVec3 item in thing.OccupiedRect())
+                    {
+                        if (item.InBounds(map) && (ABBands.InGutter(map, item) || ABBands.SameBand(map, start, item)))
+                        {
+                            return false;
+                        }
+                    }
+                }
+            }
+
+            string[] array = new string[7];
+            IntVec3 intVec = start;
+            array[0] = intVec.ToString();
+            array[1] = " band ";
+            array[2] = ABBands.BandOf(map, start).ToString();
+            array[3] = " -> ";
+            intVec = cell;
+            array[4] = intVec.ToString();
+            array[5] = " band ";
+            array[6] = ABBands.BandOf(map, cell).ToString();
+            why = string.Concat(array);
+            return true;
+        }
+
     }
 
     // =====================================================================================
@@ -415,20 +459,23 @@ namespace AsAboveSoBelow
                 typeof(PathRequest.IPathGridCustomizer)
             });
         }
-
         private static bool Prefix(Map ___map, IntVec3 start, LocalTargetInfo target,
-            ref PawnPath __result)
+            PathEndMode peMode, ref PawnPath __result)
         {
             ABPerfStats.NoteRequest(___map, sync: true);
-            if (!ABPathBandScope.CrossBand(___map, start, target, out string why))
-            {
+#if RIMWORLD_17
+            if (ABNativePortals.UsesNativeRouting(___map))
                 return true;
-            }
+#endif
+            if (!ABPathBandScope.CrossBand(___map, start, target, peMode, null, out string why))
+                return true;
+
             ABPathBandScope.rejectedSync++;
             ABPathBandScope.lastReject = "sync " + why;
             __result = PawnPath.NotFound;
             return false;
         }
+
     }
 
     /// <summary>
@@ -452,11 +499,25 @@ namespace AsAboveSoBelow
             {
                 return true;
             }
+
             ABPerfStats.NoteRequest(request.map, sync: false);
-            if (!ABPathBandScope.CrossBand(request.map, request.Start, request.Target, out string why))
+#if RIMWORLD_17
+            if (ABNativePortals.UsesNativeRouting(request.map))
+                return true;
+#endif
+            if (ABWormholePather.ConsumeDoomedRequest(request.pawn))
+            {
+                ABPathBandScope.rejectedAsync++;
+                ABPathBandScope.lastReject = "async: no link route (marked by TrySegment)";
+                request.Resolve(null);
+                return false;
+            }
+
+            if (!ABPathBandScope.CrossBand(request.map, request.Start, request.Target, request.EndMode, request.ExactDestination, out var why))
             {
                 return true;
             }
+
             ABPathBandScope.rejectedAsync++;
             ABPathBandScope.lastReject = "async " + why;
             request.Resolve(null);
@@ -464,33 +525,8 @@ namespace AsAboveSoBelow
         }
     }
 
-    // =====================================================================================
-    // 2. DOOR / PAWN / COST PROVIDER BAND SCOPE
-    // =====================================================================================
-
-    /// <summary>
-    /// PathGridDoorsBlockedJob walks every door, every cost provider and every spawned pawn
-    /// on the map ONCE PER REQUEST, writing providerCost and blocked entries at their cells.
-    /// On a banded map all but one band's worth of those writes land on cells A* can never
-    /// reach, because the gutter seals each band.
-    ///
-    /// ⚠ THIS IS THE ONE MAP SIZED PIECE OF THE PATHFINDER THAT CAN BE PATCHED AT ALL, AND
-    /// THE REASON IS ITS FIELD TYPES. It holds IReadOnlyList&lt;Thing&gt;, Map and Pawn, which
-    /// are managed references, so Burst can never compile it: it is a plain managed IJob
-    /// class while PathGridJob and PathFinderJob are Burst structs. Anything else worth
-    /// optimising in this subsystem is behind that same wall.
-    ///
-    /// ⚠ PATCHING Parameterize RATHER THAN Execute IS DELIBERATE. Execute is where the cost
-    /// is, but the lists arrive as fields, so replacing the DATA is both cheaper and safer
-    /// than replacing the READER (§14: wrap the data instead of the reader). It also keeps
-    /// vanilla's own per-tick door and pawn caching intact; we bucket its output rather than
-    /// re-querying listerThings.
-    ///
-    /// ⚠ THE THIRD PARAMETER IS A PRIVATE NESTED STRUCT AND IS SIMPLY OMITTED. The original
-    /// is ParameterizeDoorBlockedJob(PathGridDoorsBlockedJob, PathRequest, ref PathUniqueState);
-    /// PathUniqueState is private to PathFinder and must never appear in a patch signature.
-    /// Harmony binds by NAME, so taking only `job` and `request` is correct and stable.
-    /// </summary>
+#if !RIMWORLD_17
+    // The segmented 1.6 pathfinder only searches the departure band.
     [HarmonyPatch]
     public static class Patch_PathFinder_ABDoorPawnBandScope
     {
@@ -504,9 +540,10 @@ namespace AsAboveSoBelow
             ABPathBandScope.ScopeDoorJob(job, request);
         }
     }
+#endif
 
     // =====================================================================================
-    // 3. HEURISTIC STRENGTH
+    // HEURISTIC STRENGTH
     // =====================================================================================
 
     /// <summary>
@@ -533,25 +570,21 @@ namespace AsAboveSoBelow
             {
                 return;
             }
+
             Map map = pawn.Map;
-            if (map == null || !ABBands.Banded(map))
+            if (map != null && ABBands.Banded(map))
             {
-                return;
+                float num = ABPathBandScope.HeuristicBoost();
+                if (ABWormholePather.AnyPending && ABWormholePather.HasPending(pawn))
+                {
+                    num = Mathf.Max(num, 1.35f);
+                }
+
+                if (!(num <= 1f))
+                {
+                    __result = Mathf.Max(__result, num);
+                }
             }
-            float boost = ABPathBandScope.HeuristicBoost();
-            // A leg of an in-flight segmented trip gets the floor even with the slider off.
-            // HasPending is a dictionary probe gated behind a plain count read, and a pending
-            // record exists for exactly the legs that belong to a cross-island journey:
-            // TrySegment creates it BEFORE the pather builds the leg's path.
-            if (ABWormholePather.AnyPending && ABWormholePather.HasPending(pawn))
-            {
-                boost = Mathf.Max(boost, ABPathBandScope.TransitLegHeuristic);
-            }
-            if (boost <= 1f)
-            {
-                return;
-            }
-            __result *= boost;
         }
     }
 }
