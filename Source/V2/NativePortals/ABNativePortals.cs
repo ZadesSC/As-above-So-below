@@ -123,10 +123,13 @@ internal static class ABNativePortals
     internal static bool UsesNativeRouting(Map map) =>
         active && map != null && ABBands.Banded(map) && !GraphFor(map).HasSpecialConnector;
 
-    internal static bool CanCross(Pawn pawn, Building_Door near, Building_Door far) =>
+    private static bool CanCross(Pawn pawn, Building_Door near, Building_Door far) =>
         pawn.Spawned && near.Spawned && far.Spawned && near.Map == pawn.Map && far.Map == pawn.Map
         && !near.IsForbiddenToPass(pawn) && !far.IsForbiddenToPass(pawn)
         && near.CanPhysicallyPass(pawn) && far.CanPhysicallyPass(pawn);
+
+    internal static bool CanCarry(Pawn pawn, Building_Door near, Building_Door far) =>
+        CanCross(pawn, near, far) && GraphFor(pawn.Map).Links.Exists(link => link.Near == near && link.Far == far);
 
     internal static void Replan(Pawn pawn, LocalTargetInfo destination, PathEndMode endMode)
     {
@@ -186,7 +189,8 @@ internal static class ABNativePortals
     private static bool BeforeMove(Pawn_PathFollower __instance, Pawn ___pawn, PawnPath ___curPath,
         IntVec3 ___nextCell, PathEndMode ___peMode)
     {
-        if (___curPath == null || ___curPath.NodesLeftCount < 2 || !UsesNativeRouting(___pawn?.Map))
+        if (!active || ___curPath == null || ___curPath.NodesLeftCount < 2
+            || ___pawn?.Map == null || !ABBands.Banded(___pawn.Map))
             return true;
 
         IntVec3 next = ___curPath.Peek(0);
