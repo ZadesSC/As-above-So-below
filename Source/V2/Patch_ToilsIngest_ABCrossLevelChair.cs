@@ -89,8 +89,9 @@ public static class Patch_ToilsIngest_ABCrossLevelChair
             return true;
         }
 
-        float lengthHorizontal = (near.Position - from).LengthHorizontal;
-        if (lengthHorizontal > radius || lengthHorizontal + 7f >= best)
+        float costToExit = (near.Position - from).LengthHorizontal + FlightCost;
+        float remaining = radius - costToExit;
+        if (remaining < 0f || costToExit >= best)
         {
             return true;
         }
@@ -101,16 +102,25 @@ public static class Patch_ToilsIngest_ABCrossLevelChair
         }
 
         IntVec3 farRoot = far.Position;
-        Thing thing = GenClosest.ClosestThingReachable(farRoot, map, ThingRequest.ForGroup(ThingRequestGroup.BuildingArtificial), PathEndMode.OnCell, TraverseParms.For(pawn), radius, (Thing t) => ChairValidator(pawn, t) && t.Position.GetDangerFor(pawn, t.Map) == Danger.None && ABBands.SameBand(map, t.Position, farRoot));
+        var request = ThingRequest.ForGroup(ThingRequestGroup.BuildingArtificial);
+        var traverse = TraverseParms.For(pawn);
+        bool ValidChair(Thing chair) => ABBands.SameBand(map, chair.Position, farRoot)
+            && ChairValidator(pawn, chair) && chair.Position.GetDangerFor(pawn, map) == Danger.None;
+
+        Thing thing = GenClosest.ClosestThingReachable(farRoot, map, request, PathEndMode.OnCell,
+            traverse, remaining, ValidChair);
+        // Region search excludes the radius itself, including the root when the radius is zero.
+        thing ??= GenClosest.ClosestThing_Global(farRoot, map.listerThings.ThingsMatching(request),
+            remaining, chair => ValidChair(chair) && map.reachability.CanReach(farRoot, chair, PathEndMode.OnCell, traverse));
         if (thing == null)
         {
             return true;
         }
 
-        float num = lengthHorizontal + 7f + (thing.Position - farRoot).LengthHorizontal;
-        if (num < best)
+        float total = costToExit + (thing.Position - farRoot).LengthHorizontal;
+        if (total <= radius && total < best)
         {
-            best = num;
+            best = total;
             bestChair = thing;
         }
 

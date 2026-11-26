@@ -1,5 +1,7 @@
 using System;
 using System.Collections;
+using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using HarmonyLib;
 using RimWorld;
@@ -9,6 +11,10 @@ using Verse.AI;
 
 public sealed class WorkshopParityFixture : FixtureProvider
 {
+    private readonly string connector;
+
+    public WorkshopParityFixture(string connector = "AB2_LadderUp") => this.connector = connector;
+
     public override FixtureContract Contract => new FixtureContract
     {
         Id = "aasb-workshop-parity",
@@ -84,9 +90,9 @@ public sealed class WorkshopParityFixture : FixtureProvider
         {
             roofSync.SetValue(null, previousRoofSync);
         }
-        var ladder = GenSpawn.Spawn(ThingMaker.MakeThing(c.Def<ThingDef>("AB2_LadderUp"), ThingDefOf.Steel),
+        var link = GenSpawn.Spawn(ThingMaker.MakeThing(c.Def<ThingDef>(connector), ThingDefOf.Steel),
             new IntVec3(64, 0, 30), c.Map);
-        ladder.SetFaction(Faction.OfPlayer);
+        link.SetFaction(Faction.OfPlayer);
         c.Map.roofCollapseBuffer.Clear();
         c.Map.regionAndRoomUpdater.RebuildAllRegionsAndRooms();
     }
@@ -403,5 +409,191 @@ public sealed class WorkshopRopeScenario : Rwtf.Scenario
         var loaded = c.Subject<Pawn>("roped-sheep");
         c.Check("transported animal and hitch survived reload", loaded.Position.z >= 64
             && loaded.roping.RopedToHitchingSpot?.Position == HitchingCell);
+    }
+}
+
+public sealed class WorkshopChairRadiusScenario : Rwtf.Scenario
+{
+    private static readonly IntVec3 Start = new IntVec3(60, 0, 30);
+    private static readonly IntVec3 Exit = new IntVec3(64, 0, 94);
+    private static readonly IntVec3 Seat = new IntVec3(67, 0, 94);
+    private const int ApproachAndFlight = 11;
+    private const int CombinedCost = 14;
+    private Pawn diner;
+    private Thing meal;
+    private Building chair;
+    private Building table;
+    private Building_Door exit;
+    private float originalRadius;
+    private int jobRadius;
+    private bool started;
+    private bool observedEating;
+    private bool ateUpstairs;
+    private int captureFrames;
+    private string capturePath;
+
+    public override string Id => "aasb.workshop-chair-radius";
+    public override string Intent => "Verify the combined chair radius and observe a native ingestion job";
+    public override string ProgressionMode => "native-frames-v1";
+    public override string EvidenceLevel => "assigned-job";
+    public override string[] SupportedGameVersions => new[] { "1.7" };
+    public override string[] RequiredPackages => new[] { "astryl.AsAboveSoBelow2" };
+    public override string[] RequiredDefs => new[] { "AB2_StairsUp", "DiningChair", "Table1x2c", "MealSimple" };
+    public override FixtureProvider Fixture => new WorkshopParityFixture("AB2_StairsUp");
+
+    public override void Setup(Context c)
+    {
+        diner = c.SpawnPawn("diner", "Colonist", Start, Faction.OfPlayer);
+        diner.Name = new NameSingle("Diner");
+        meal = ThingMaker.MakeThing(c.Def<ThingDef>("MealSimple"));
+        originalRadius = meal.def.ingestible.chairSearchRadius;
+        chair = SpawnFurniture(c, "DiningChair", Seat, Rot4.East);
+        table = SpawnFurniture(c, "Table1x2c", Seat + IntVec3.East, Rot4.North);
+        var pairs = new List<KeyValuePair<Building_Door, Building_Door>>();
+        AccessTools.Method(c.OptionalType("AsAboveSoBelow.ABWormhole"), "CollectPairs")
+            .Invoke(null, new object[] { c.Map, pairs });
+        var pair = pairs.Single();
+        var near = pair.Key.Position.z < 64 ? pair.Key : pair.Value;
+        exit = near == pair.Key ? pair.Value : pair.Key;
+        c.Check("fixture has one stair pair and a valid upstairs dining set",
+            near.Position == new IntVec3(64, 0, 30) && exit.Position == Exit
+            && chair.Position == Seat && table.def.surfaceType == SurfaceType.Eat
+            && c.Map.reachability.CanReach(Exit, chair, PathEndMode.OnCell, TraverseParms.For(diner)),
+            new { start = Start.ToString(), entrance = near.Position.ToString(), exit = exit.Position.ToString(),
+                seat = Seat.ToString(), approach = (near.Position - Start).LengthHorizontal,
+                exitLeg = (Seat - Exit).LengthHorizontal });
+        jobRadius = int.Parse(c.Parameter("ChairJobRadius", CombinedCost.ToString()));
+        if (jobRadius != CombinedCost && jobRadius != CombinedCost - 1)
+            throw new Unsupported("Choose the boundary or one cell below it for the photographed job");
+    }
+
+    private static Building SpawnFurniture(Context c, string def, IntVec3 cell, Rot4 rotation)
+    {
+        var building = (Building)ThingMaker.MakeThing(c.Def<ThingDef>(def), ThingDefOf.Steel);
+        building.SetFaction(Faction.OfPlayer);
+        return (Building)GenSpawn.Spawn(building, cell, c.Map, rotation);
+    }
+
+    public override bool AdvanceNative(Context c)
+    {
+        if (!started)
+        {
+            started = true;
+            diner.jobs.StopAll();
+            diner.Position = Start;
+            diner.Notify_Teleported();
+            diner.needs.food.CurLevelPercentage = 0.35f;
+            try
+            {
+                CheckSeat(c, "in range", CombinedCost + 1, Seat);
+                CheckSeat(c, "exact combined budget", CombinedCost, Seat);
+                CheckSeat(c, "one cell beyond combined budget", CombinedCost - 1, null);
+                CheckSeat(c, "flight consumes more than the budget", ApproachAndFlight - 1, null);
+                CheckSeat(c, "zero remainder excludes positive exit leg", ApproachAndFlight, null);
+                CheckSeatAtExit(c);
+
+                var localChair = SpawnFurniture(c, "DiningChair", Start + IntVec3.West, Rot4.West);
+                var localTable = SpawnFurniture(c, "Table1x2c", localChair.Position + IntVec3.West, Rot4.North);
+                try { CheckSeat(c, "vanilla nearby chair takes precedence", CombinedCost, localChair.Position); }
+                finally { localChair.Destroy(); localTable.Destroy(); }
+            }
+            finally
+            {
+                meal.def.ingestible.chairSearchRadius = originalRadius;
+            }
+
+            meal.def.ingestible.chairSearchRadius = jobRadius;
+            GenSpawn.Spawn(meal, Start, c.Map);
+            var job = JobMaker.MakeJob(JobDefOf.Ingest, meal);
+            job.count = 1;
+            job.playerForced = true;
+            diner.jobs.StartJob(job, JobCondition.InterruptForced);
+        }
+
+        if (!observedEating)
+        {
+            if (diner.CurJobDef != JobDefOf.Ingest || diner.jobs.curDriver.CurToilString != "ChewIngestible"
+                || diner.carryTracker.CarriedThing != meal)
+                return false;
+
+            observedEating = true;
+            ateUpstairs = diner.Position == Seat;
+            bool expected = jobRadius == CombinedCost ? ateUpstairs : diner.Position.z < 64;
+            c.Check("native ingestion destination obeys the combined chair budget", expected,
+                new { radius = jobRadius, cost = CombinedCost, pos = diner.Position.ToString(),
+                    table = table.Position.ToString(), carrying = diner.carryTracker.CarriedThing.Label });
+            if (!string.IsNullOrEmpty(c.Parameter("CaptureChairJob")))
+            {
+                AccessTools.Method(c.OptionalType("AsAboveSoBelow.ABBandView"), "SetBand")
+                    .Invoke(null, new object[] { c.Map, diner.Position.z < 64 ? 0 : 1, false });
+                Find.CameraDriver.SetRootPosAndSize(diner.Position.ToVector3Shifted(), 12f);
+                Find.Selector.Select(diner);
+                string outcome = ateUpstairs ? "Diner reached the upstairs table" : "Diner stayed downstairs";
+                Messages.Message($"Chair radius {jobRadius}, upstairs chair costs {CombinedCost}. {outcome}.",
+                    MessageTypeDefOf.NeutralEvent, false);
+                capturePath = Path.Combine(c.Output, "chair-ingestion.png");
+            }
+        }
+        if (capturePath != null)
+        {
+            captureFrames++;
+            if (captureFrames == 3)
+            {
+                UnityEngine.ScreenCapture.CaptureScreenshot(capturePath);
+                c.Event("chair-capture-request", new { file = Path.GetFileName(capturePath), tick = c.Tick,
+                    pawn = diner.Position.ToString(), radius = jobRadius, expectedCost = CombinedCost });
+            }
+            if (captureFrames < 4 || !File.Exists(capturePath))
+                return false;
+        }
+        return meal.Destroyed;
+    }
+
+    private void CheckSeatAtExit(Context c)
+    {
+        // A connector normally occupies the exit cell. Make that building a valid seat temporarily
+        // to exercise zero remaining distance without introducing an overlapping edifice.
+        var exitTable = SpawnFurniture(c, "Table1x2c", Exit + IntVec3.West, Rot4.North);
+        var props = exit.def.building;
+        var previous = props.isSittable;
+        var previousFaction = exit.Faction;
+        try
+        {
+            props.isSittable = true;
+            exit.SetFactionDirect(Faction.OfPlayer);
+            bool free = Toils_Ingest.TryFindFreeSittingSpotOnThing(exit, diner, out var seat);
+            bool reachable = c.Map.reachability.CanReach(Exit, exit, PathEndMode.OnCell, TraverseParms.For(diner));
+            c.Check("the synthetic seat at the exit is valid", free && seat == Exit && reachable
+                && (seat + IntVec3.West).GetEdifice(c.Map) == exitTable,
+                new { free, seat = seat.ToString(), reachable, table = exitTable.Position.ToString() });
+            CheckSeat(c, "zero remainder includes a seat exactly at the exit", ApproachAndFlight, Exit);
+        }
+        finally
+        {
+            exit.SetFactionDirect(previousFaction);
+            props.isSittable = previous;
+            exitTable.Destroy();
+        }
+    }
+
+    private void CheckSeat(Context c, string name, float radius, IntVec3? expected)
+    {
+        meal.def.ingestible.chairSearchRadius = radius;
+        bool found = Toils_Ingest.TryFindChairOrSpot(diner, meal, out var cell);
+        c.Check(name, found && (expected.HasValue ? cell == expected.Value : cell.z < 64
+            && cell.GetEdifice(c.Map)?.def.building.isSittable != true), new { radius,
+                approachAndFlight = ApproachAndFlight, combined = CombinedCost, cell = cell.ToString(), found });
+    }
+
+    public override void Assert(Context c)
+    {
+        c.Check("native ingestion finished and consumed its meal", observedEating && meal.Destroyed);
+        meal.def.ingestible.chairSearchRadius = originalRadius;
+    }
+
+    public override void Teardown(Context c)
+    {
+        if (meal != null)
+            meal.def.ingestible.chairSearchRadius = originalRadius;
     }
 }
