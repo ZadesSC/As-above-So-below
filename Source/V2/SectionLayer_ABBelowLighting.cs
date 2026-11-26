@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System;
 using HarmonyLib;
 using RimWorld;
@@ -63,66 +64,41 @@ namespace AsAboveSoBelow
                 Release();
                 return;
             }
+
             Map map = section.map;
-            ABBandMap bands = ABBands.CompOf(map);
-            if (bands == null || !bands.Banded)
+            ABBandMap aBBandMap = ABBands.CompOf(map);
+            if (aBBandMap == null || !aBBandMap.Banded)
             {
                 Release();
                 return;
             }
+
             try
             {
-                CellRect rect = new CellRect(section.botLeft.x, section.botLeft.z, 17, 17);
-                rect.ClipInsideMap(map);
-                if (rect.Width <= 0 || rect.Height <= 0)
+                CellRect cellRect = new CellRect(section.botLeft.x, section.botLeft.z, 17, 17);
+                cellRect.ClipInsideMap(map);
+                if (cellRect.Width <= 0 || cellRect.Height <= 0)
                 {
                     Release();
                     return;
                 }
-                // ⚠ BAKE THE GEOMETRY ONCE. This method used to open with Release() and
-                // re-Bake unconditionally, which allocated a fresh Unity Mesh and Destroy()d
-                // the previous one on EVERY regenerate - while vanilla's own overlay, and
-                // every other layer in this mod, reuses its submesh forever.
-                //
-                // It was the most expensive line in the see-below stack and the cost was
-                // invisible in an fps average, because it is paid in BURSTS: the dirty mirror
-                // next door invalidates a section stack per band, so one mined rock could
-                // allocate and destroy one Mesh per band per section touched. Native mesh
-                // allocation is not cheap and Destroy is deferred to end of frame, so the
-                // churn lands as a hitch during exactly the activity that triggers it.
-                //
-                // Safe to reuse because the geometry is a pure function of `rect`, and rect
-                // derives from section.botLeft, which never changes for a given layer. Unity's
-                // fake-null makes the check also catch a mesh destroyed underneath us.
+
                 if (mesh == null || mesh.mesh == null)
                 {
                     Release();
-                    mesh = SectionLayer_LightingOverlay.Bake(map, rect, MatBases.LightOverlay, null);
-                    offset = new Vector3(rect.minX + rect.Width / 2f, 0f, rect.minZ + rect.Height / 2f);
+                    mesh = SectionLayer_LightingOverlay.Bake(map, cellRect, MatBases.LightOverlay, null);
+                    offset = new Vector3((float)cellRect.minX + (float)cellRect.Width / 2f, 0f, (float)cellRect.minZ + (float)cellRect.Height / 2f);
+                    bakedRect = cellRect;
+                    fullTris = mesh.tris.ToArray();
+                    voidCut = false;
                 }
-                // Only the COLOURS are per-regenerate - which is the whole reason vanilla
-                // splits Bake from the colour pass, and the reason this split was already
-                // sitting here unused.
+
                 if (mesh?.mesh != null)
                 {
-                    Color32[] colors = BuildColors(map, bands, rect);
-
-                    // Third-party contributions to THIS mesh, folded in here because we own it.
-                    //
-                    // Celestial Lighting writes indoor sky occlusion (alpha) and true line-of-sight
-                    // lamp light (rgb) into vanilla's overlay via postfixes on its Regenerate. We do
-                    // not go through Regenerate - Bake(...) reaches GenerateLightingOverlay directly -
-                    // and vanilla's overlay is suppressed map-wide on a banded map, so without this
-                    // call those two effects are absent from the entire map rather than merely wrong
-                    // on see-through cells. Inert unless Celestial Lighting is installed AND exposes
-                    // the hook.
-                    //
-                    // Kept OUT of BuildColors so BuildColors stays a pure function of our own state -
-                    // which is what lets the dev report probe our colours and each third-party pass
-                    // separately instead of only seeing the composite.
-                    CelestialLightingCompat.ApplyOverlayPasses(map, rect, colors);
-
-                    mesh.mesh.colors32 = colors;
+                    Color32[] array = (ZeroColors ? new Color32[(cellRect.Width + 1) * (cellRect.Height + 1) + cellRect.Width * cellRect.Height] : BuildColors(map, aBBandMap, cellRect));
+                    CelestialLightingCompat.ApplyOverlayPasses(map, cellRect, array);
+                    mesh.mesh.colors32 = array;
+                    ApplyVoidCut(map, aBBandMap, cellRect);
                 }
             }
             catch (Exception e)
@@ -142,96 +118,91 @@ namespace AsAboveSoBelow
         /// </summary>
         internal static Color32[] BuildColors(Map map, ABBandMap bands, CellRect rect)
         {
-            int w = rect.Width;
-            int h = rect.Height;
-            int firstCenterInd = (w + 1) * (h + 1);
-            Color32[] colors = new Color32[firstCenterInd + w * h];
-
-            CellIndices indices = map.cellIndices;
-            RoofGrid roofs = map.roofGrid;
-            GlowGrid glow = map.glowGrid;
-            Thing[] edifices = map.edificeGrid.InnerArray;
-            int sizeX = map.Size.x;
-            int sizeZ = map.Size.z;
-
-            // --- corner vertices: average the four cells touching each one ---------
-            for (int vz = 0; vz <= h; vz++)
+            int width = rect.Width;
+            int height = rect.Height;
+            int num = (width + 1) * (height + 1);
+            Color32[] array = new Color32[num + width * height];
+            CellIndices cellIndices = map.cellIndices;
+            RoofGrid roofGrid = map.roofGrid;
+            GlowGrid glowGrid = map.glowGrid;
+            Thing[] innerArray = map.edificeGrid.InnerArray;
+            Thing[] array2 = innerArray;
+            int x = map.Size.x;
+            int z = map.Size.z;
+            for (int i = 0; i <= height; i++)
             {
-                for (int vx = 0; vx <= w; vx++)
+                for (int j = 0; j <= width; j++)
                 {
-                    int worldX = rect.minX + vx;
-                    int worldZ = rect.minZ + vz;
-                    ColorInt sum = new ColorInt(0, 0, 0, 0);
-                    int n = 0;
-                    bool roofed = false;
-
-                    for (int corner = 0; corner < 4; corner++)
+                    int num2 = rect.minX + j;
+                    int num3 = rect.minZ + i;
+                    ColorInt colorInt = new ColorInt(0, 0, 0, 0);
+                    int num4 = 0;
+                    bool flag = false;
+                    for (int k = 0; k < 4; k++)
                     {
-                        int cx = worldX - (corner % 2 == 0 ? 1 : 0);
-                        int cz = worldZ - (corner < 2 ? 1 : 0);
-                        if (cx < 0 || cz < 0 || cx >= sizeX || cz >= sizeZ)
+                        int num5 = num2 - ((k % 2 == 0) ? 1 : 0);
+                        int num6 = num3 - ((k < 2) ? 1 : 0);
+                        if (num5 < 0 || num6 < 0 || num5 >= x || num6 >= z)
                         {
                             continue;
                         }
-                        int idx = SourceIndex(map, bands, indices, indices.CellToIndex(cx, cz));
-                        if (idx < 0)
+
+                        int num7 = SourceIndex(map, bands, cellIndices, cellIndices.CellToIndex(num5, num6));
+                        if (num7 >= 0)
                         {
-                            continue;
-                        }
-                        Thing edifice = edifices[idx];
-                        RoofDef roof = roofs.RoofAt(idx);
-                        if (roof != null && (roof.isThickRoof || edifice == null
-                            || !edifice.def.holdsRoof
-                            || edifice.def.altitudeLayer == AltitudeLayer.DoorMoveable))
-                        {
-                            roofed = true;
-                        }
-                        if (edifice == null || !edifice.def.blockLight)
-                        {
-                            sum += glow.VisualGlowAt(idx);
-                            n++;
+                            Thing thing = array2[num7];
+                            RoofDef roofDef = roofGrid.RoofAt(num7);
+                            if (!flag && roofDef != null && (roofDef.isThickRoof || thing == null || !thing.def.holdsRoof || thing.def.altitudeLayer == AltitudeLayer.DoorMoveable) && (!roofDef.isThickRoof || thing == null || !thing.def.mineable || !SectionLayer_ABRockRootFill.LitAsOpenEdge(map, bands, num7)))
+                            {
+                                flag = true;
+                            }
+
+                            if (thing == null || !thing.def.blockLight)
+                            {
+                                colorInt += glowGrid.VisualGlowAt(num7);
+                                num4++;
+                            }
                         }
                     }
 
-                    Color32 col = n > 0 ? (sum / n).ProjectToColor32() : Transparent;
-                    if (roofed && col.a < 100)
+                    Color32 color = ((num4 > 0) ? (colorInt / num4).ProjectToColor32() : Transparent);
+                    if (flag && color.a < 100)
                     {
-                        col.a = 100;
+                        color.a = 100;
                     }
-                    colors[vz * (w + 1) + vx] = col;
+
+                    array[i * (width + 1) + j] = color;
                 }
             }
 
-            // --- centre vertices: average this cell's own four corners --------------
-            for (int cz = 0; cz < h; cz++)
+            for (int l = 0; l < height; l++)
             {
-                for (int cx = 0; cx < w; cx++)
+                for (int m = 0; m < width; m++)
                 {
-                    int botLeft = cz * (w + 1) + cx;
-                    ColorInt sum = default(ColorInt);
-                    sum += colors[botLeft];
-                    sum += colors[botLeft + 1];
-                    sum += colors[botLeft + w + 1];
-                    sum += colors[botLeft + w + 2];
-                    Color32 col = new Color32((byte)(sum.r / 4), (byte)(sum.g / 4),
-                        (byte)(sum.b / 4), (byte)(sum.a / 4));
-
-                    int worldX = rect.minX + cx;
-                    int worldZ = rect.minZ + cz;
-                    int idx = SourceIndex(map, bands, indices,
-                        indices.CellToIndex(worldX, worldZ));
-                    if (col.a < 100 && idx >= 0 && roofs.Roofed(idx))
+                    int num8 = l * (width + 1) + m;
+                    ColorInt colorInt2 = default;
+                    colorInt2 += array[num8];
+                    colorInt2 += array[num8 + 1];
+                    colorInt2 += array[num8 + width + 1];
+                    colorInt2 += array[num8 + width + 2];
+                    Color32 color2 = new Color32((byte)(colorInt2.r / 4), (byte)(colorInt2.g / 4), (byte)(colorInt2.b / 4), (byte)(colorInt2.a / 4));
+                    int x2 = rect.minX + m;
+                    int z2 = rect.minZ + l;
+                    int num9 = SourceIndex(map, bands, cellIndices, cellIndices.CellToIndex(x2, z2));
+                    if (color2.a < 100 && num9 >= 0 && roofGrid.Roofed(num9))
                     {
-                        Thing edifice = edifices[idx];
-                        if (edifice == null || !edifice.def.holdsRoof)
+                        Thing thing2 = array2[num9];
+                        if (thing2 == null || !thing2.def.holdsRoof)
                         {
-                            col.a = 100;
+                            color2.a = 100;
                         }
                     }
-                    colors[firstCenterInd + cz * w + cx] = col;
+
+                    array[num + l * width + m] = color2;
                 }
             }
-            return colors;
+
+            return array;
         }
 
         /// <summary>
@@ -285,16 +256,166 @@ namespace AsAboveSoBelow
         /// regeneration leaks one.</summary>
         private void Release()
         {
-            if (mesh == null)
+            fullTris = null;
+            voidCut = false;
+            if (mesh != null)
+            {
+                if (mesh.mesh != null)
+                {
+                    UnityEngine.Object.Destroy(mesh.mesh);
+                }
+
+                mesh = null;
+            }
+        }
+        internal string ReportAt(IntVec3 c)
+        {
+            if (mesh == null || mesh.mesh == null)
+            {
+                return "  AB overlay: no mesh";
+            }
+
+            CellRect cellRect = bakedRect;
+            CellRect cellRect2;
+            if (!cellRect.Contains(c))
+            {
+                cellRect2 = cellRect;
+                return "  AB overlay: cell outside baked rect " + cellRect2.ToString();
+            }
+
+            int width = cellRect.Width;
+            int num = (width + 1) * (cellRect.Height + 1);
+            int num2 = c.x - cellRect.minX;
+            int num3 = c.z - cellRect.minZ;
+            int num4 = num3 * (width + 1) + num2;
+            int num5 = (num3 + 1) * (width + 1) + num2;
+            int i = num5 + 1;
+            int i2 = num4 + 1;
+            int i3 = num + num3 * width + num2;
+            Color32[] cols = mesh.mesh.colors32;
+            string[] array = new string[28]
+            {
+                "  AB overlay: visible=",
+                Visible.ToString(),
+                " verts=",
+                mesh.mesh.vertexCount.ToString(),
+                " colors=",
+                cols.Length.ToString(),
+                " material=",
+                mesh.material?.name,
+                " shader=",
+                mesh.material?.shader?.name,
+                " queue=",
+                (mesh.material?.renderQueue).ToString(),
+                " layer=",
+                mesh.renderLayer.ToString(),
+                " rect=",
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+            };
+            cellRect2 = cellRect;
+            array[15] = cellRect2.ToString();
+            array[16] = " zeroColors=";
+            array[17] = ZeroColors.ToString();
+            array[18] = "\n    BL=";
+            array[19] = At(num4);
+            array[20] = " TL=";
+            array[21] = At(num5);
+            array[22] = " TR=";
+            array[23] = At(i);
+            array[24] = " BR=";
+            array[25] = At(i2);
+            array[26] = " C=";
+            array[27] = At(i3);
+            return string.Concat(array);
+            string At(int num6)
+            {
+                return (num6 >= 0 && num6 < cols.Length) ? cols[num6].ToString() : "(none)";
+            }
+        }
+
+        private void ApplyVoidCut(Map map, ABBandMap bands, CellRect rect)
+        {
+            if (fullTris == null)
             {
                 return;
             }
-            if (mesh.mesh != null)
+
+            if (!ABSpaceBackdrop.HasWorldBackdrop(map) || !VoidCut)
             {
-                UnityEngine.Object.Destroy(mesh.mesh);
+                if (voidCut)
+                {
+                    mesh.mesh.SetTriangles(fullTris, 0);
+                    voidCut = false;
+                }
+
+                mesh.disabled = false;
+                return;
             }
-            mesh = null;
+
+            List<int> list = cutScratch;
+            list.Clear();
+            int width = rect.Width;
+            int num = 0;
+            for (int i = 0; i < rect.Height; i++)
+            {
+                int num2 = 0;
+                while (num2 < width)
+                {
+                    IntVec3 cell = new IntVec3(rect.minX + num2, 0, rect.minZ + i);
+                    if (!ABSpaceBackdrop.IsVoid(map, bands, cell))
+                    {
+                        int num3 = num * 12;
+                        if (num3 + 12 > fullTris.Length)
+                        {
+                            break;
+                        }
+
+                        for (int j = 0; j < 12; j++)
+                        {
+                            list.Add(fullTris[num3 + j]);
+                        }
+                    }
+
+                    num2++;
+                    num++;
+                }
+            }
+
+            voidCut = true;
+            if (list.Count == 0)
+            {
+                mesh.disabled = true;
+                return;
+            }
+
+            mesh.disabled = false;
+            mesh.mesh.SetTriangles(list, 0);
         }
+
+        internal static bool VoidCut = false;
+
+        private static readonly List<int> cutScratch = new List<int>(3468);
+
+        private bool voidCut;
+
+        private int[] fullTris;
+
+        internal static bool ZeroColors = false;
+
+        private CellRect bakedRect;
+
     }
 
     /// <summary>
@@ -318,10 +439,11 @@ namespace AsAboveSoBelow
 
         private static void Postfix(SectionLayer_LightingOverlay __instance, ref bool __result)
         {
-            if (!__result || !ABGuard.On(ABGuard.Rendering))
+            if (!__result || !ABGuard.On(ABGuard.Rendering) || LetVanillaDraw)
             {
                 return;
             }
+
             try
             {
                 Map map = SectionRef(__instance)?.map;
@@ -330,16 +452,17 @@ namespace AsAboveSoBelow
                     __result = false;
                 }
             }
-            catch (Exception e)
+            catch (Exception ex)
             {
                 if (!warned)
                 {
                     warned = true;
-                    Log.Error(ABLog.Tag + " V2: could not suppress vanilla lighting overlay on"
-                        + " banded maps; below content will be double-darkened. " + e);
+                    Log.Error("[As above, So below] V2: could not suppress vanilla lighting overlay on banded maps; below content will be double-darkened. " + ex);
                 }
             }
         }
+        internal static bool LetVanillaDraw = false;
+
     }
 
     // ⚠⚠ DO NOT RE-ADD THE "SKIP VANILLA'S BAKE TOO" PREFIX. It existed here until

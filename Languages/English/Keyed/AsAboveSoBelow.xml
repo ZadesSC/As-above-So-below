@@ -28,6 +28,7 @@
   <AB_GoToLevel>{0} (level {1})</AB_GoToLevel>
 
   <AB_LinkNeedsApproach>Must have at least one open cell directly beside it (not diagonal) for pawns to step in from.</AB_LinkNeedsApproach>
+  <AB_OrbitLinkNeedsPlatform>In orbit, only orbital platform ground carries a level above. Gravship decks and open space do not.</AB_OrbitLinkNeedsPlatform>
 
   <AB_GoDown>Go down the stairs</AB_GoDown>
   <AB_GoUp>Go up the stairs</AB_GoUp>
@@ -96,6 +97,7 @@ You can turn this back off at any time; existing colonies keep the size they wer
   <AB_LevelsSuspendedNote>Multiple levels are currently switched off on the map size screen, so new colonies generate as ordinary single-level maps until it is switched back on.</AB_LevelsSuspendedNote>
   <AB_LevelsAbove>Above surface</AB_LevelsAbove>
   <AB_LevelsBelow>Below surface</AB_LevelsBelow>
+  <AB_LevelsBelowOrbit>none (orbital colonies have no basement)</AB_LevelsBelowOrbit>
   <AB_LevelsSummary>{0} levels, {1}x{1} each</AB_LevelsSummary>
   <AB_LevelsCells>{0} cells (budget {1})</AB_LevelsCells>
   <AB_LevelsHeadroom>This size affords up to {0} levels</AB_LevelsHeadroom>
@@ -135,6 +137,18 @@ You can turn this back off at any time; existing colonies keep the size they wer
   <AB_PSFreezePeekTip>Perspective Shift only. While you are playing as a character and you look at a level they are not standing on, the camera stays where you put it instead of being pulled back to them. Leave this on and your character holds position, and cannot move or shoot, until you come back to their level. Turn it off to keep walking around off-screen while you watch somewhere else.</AB_PSFreezePeekTip>
   <AB_IOStackTour>Show the whole stack in the opening cinematic</AB_IOStackTour>
   <AB_IOStackTourTip>Immersive Opening only. Off, the opening plays out on your colony's level, exactly as that mod intends. On, it works its way down the column instead - a sentence or two on each level you can actually see, starting at the top and finishing on the colony. Levels below ground are skipped either way: they are solid rock until something digs into them, so there is nothing there to film yet.</AB_IOStackTourTip>
+  <!-- Progress Renderer support. Only shown when that mod is loaded. -->
+  <AB_PRLevel>Level Progress Renderer photographs</AB_PRLevel>
+  <AB_PRLevelNote>A stacked colony has no single picture to take, so pick the level it points at. Every level at once would be too tall for the game to draw.</AB_PRLevelNote>
+  <AB_PRLevelNow>On this colony that is level {0}.</AB_PRLevelNow>
+  <AB_PRLevelNowSurface>On this colony that is the surface.</AB_PRLevelNowSurface>
+  <AB_PRLevelTopmost>The top level</AB_PRLevelTopmost>
+  <AB_PRLevelTopmostTip>The highest level this colony has. Open sky up there shows the surface below it, so this is usually an aerial view of the whole colony with any rooftops sitting on top of it. It is drawn through the depth shading, so it comes out slightly darker than looking at the surface directly.</AB_PRLevelTopmostTip>
+  <AB_PRLevelSurface>The surface</AB_PRLevelSurface>
+  <AB_PRLevelSurfaceTip>Ground level, whatever you have built above it. Anything on a higher level hides what is under it, the same as it does when you are looking at the surface yourself.</AB_PRLevelSurfaceTip>
+  <AB_PRLevelViewed>Whichever level you are looking at</AB_PRLevelViewed>
+  <AB_PRLevelViewedTip>Photographs the level on screen at the moment the picture is taken. Good for the manual screenshot key, poor for a timelapse: the hourly pictures will jump between levels depending on where you happened to be looking.</AB_PRLevelViewedTip>
+
   <AB_VerboseLogging>Verbose logging</AB_VerboseLogging>
   <AB_VerboseLoggingTip>Write detailed diagnostic messages to the log. Only useful when hunting a bug.</AB_VerboseLoggingTip>
 

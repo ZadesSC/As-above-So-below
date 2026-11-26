@@ -48,261 +48,231 @@ namespace AsAboveSoBelow
 
         private const float MeadowCutoffDefault = 0.62f;
 
-        internal static void Generate(Map map, ABBandMap bands, int band,
-            List<ThingDef> rocks, List<Perlin> noises)
+        internal static void Generate(Map map, ABBandMap bands, int band, List<ThingDef> rocks, List<Perlin> noises)
         {
-            CellRect rect = bands.RectOfBand(band);
-            int w = rect.Width;
-            int h = rect.Height;
-            int count = w * h;
+            CellRect cellRect = bands.RectOfBand(band);
+            int width = cellRect.Width;
+            int height = cellRect.Height;
+            int num = width * height;
             int slot = bands.Slot;
-            TerrainGrid grid = map.terrainGrid;
-            RoofGrid roofs = map.roofGrid;
-            TerrainDef air = ABDefOf.AB_OpenAir;
+            TerrainGrid terrainGrid = map.terrainGrid;
+            RoofGrid roofGrid = map.roofGrid;
+            TerrainDef aB_OpenAir = ABDefOf.AB_OpenAir;
+            bool[] array = new bool[num];
+            bool[] array2 = new bool[num];
+            bool[] array3 = new bool[num];
+            bool flag = false;
+            Queue<int> queue = new Queue<int>();
+            for (int i = 0; i < height; i++)
+            {
+                for (int j = 0; j < width; j++)
+                {
+                    IntVec3 intVec = new IntVec3(cellRect.minX + j, 0, cellRect.minZ + i - slot);
+                    if (intVec.InBounds(map))
+                    {
+                        Building building = map.edificeGrid[intVec];
+                        RoofDef roofDef = roofGrid.RoofAt(intVec);
+                        bool flag2 = roofDef != null && roofDef.isNatural && roofDef.isThickRoof;
+                        int num2 = i * width + j;
+                        array[num2] = flag2 || (building?.def.mineable ?? false);
+                        if (BuiltBelow(map, intVec, building, roofDef))
+                        {
+                            array3[num2] = true;
+                            flag = true;
+                        }
 
-            // ---- pass 1: the solid mass, projected from the band below -----
-            //
-            // "Rockish" is the raw per-cell test V1 shipped: a mineable edifice below, or
-            // thick natural roof below. ⚠ THAT TEST ALONE IS NOT THE MASS. ReGrowth and
-            // Medieval Overhaul scatter decorative boulders and surface ore lumps in OPEN
-            // terrain (thingClass Mineable, so def.mineable is true), and vanilla itself
-            // drops mineable lumps on flat maps - every one of them passed the rockish
-            // test and projected a floating rock nub onto the level above (field report:
-            // "mountains generate above boulders").
-            //
-            // The invariant that separates furniture-rock from mountain is the ROOF: every
-            // real rock mass has a RoofRockThick core (vanilla's RocksFromGrid lays it,
-            // and our own KindWall cells re-create it on each generated band, so the
-            // projection chain up through +2/+3 is unaffected), while a boulder in a field
-            // never has one. So: SEED at thick natural roof, FLOOD outward through
-            // rockish cells 8-way, and only what the flood reaches is mass. A mountain's
-            // thin-roofed mineable fringe is connected to its core and stays included; an
-            // isolated boulder, however large, has no seed in its component and projects
-            // nothing - the level above it is open air and the see-below view draws the
-            // boulder itself, which is exactly what a boulder under the sky should be.
-            //
-            // Def-agnostic on purpose (rule 23: audit the weighting, not the symbol): no
-            // packageId gate, no def whitelist, covers mods we have never heard of. A
-            // side effect is that an all-thin-roof rock sliver (a rib one wall high) no
-            // longer projects either, which is the correct physical reading.
-            bool[] rockish = new bool[count];
-            bool[] solid = new bool[count];
-            Queue<int> flood = new Queue<int>();
-            for (int z = 0; z < h; z++)
-            {
-                for (int x = 0; x < w; x++)
-                {
-                    IntVec3 below = new IntVec3(rect.minX + x, 0, rect.minZ + z - slot);
-                    if (!below.InBounds(map))
-                    {
-                        continue;
-                    }
-                    Building edifice = map.edificeGrid[below];
-                    RoofDef roof = roofs.RoofAt(below);
-                    bool thickNatural = roof != null && roof.isNatural && roof.isThickRoof;
-                    int idx = z * w + x;
-                    rockish[idx] = thickNatural || (edifice != null && edifice.def.mineable);
-                    if (thickNatural)
-                    {
-                        solid[idx] = true;
-                        flood.Enqueue(idx);
-                    }
-                }
-            }
-            // 8-way, matching Classify's own adjacency metric, so the mass the flood
-            // accepts is connected under the same notion of "touching" the classifier
-            // then uses to walk it.
-            while (flood.Count > 0)
-            {
-                int idx = flood.Dequeue();
-                int cx = idx % w;
-                int cz = idx / w;
-                for (int dz = -1; dz <= 1; dz++)
-                {
-                    for (int dx = -1; dx <= 1; dx++)
-                    {
-                        if (dx == 0 && dz == 0)
+                        if (flag2)
                         {
-                            continue;
-                        }
-                        int nx = cx + dx;
-                        int nz = cz + dz;
-                        if (nx < 0 || nx >= w || nz < 0 || nz >= h)
-                        {
-                            continue;
-                        }
-                        int nidx = nz * w + nx;
-                        if (rockish[nidx] && !solid[nidx])
-                        {
-                            solid[nidx] = true;
-                            flood.Enqueue(nidx);
+                            array2[num2] = true;
+                            queue.Enqueue(num2);
                         }
                     }
                 }
             }
 
-            byte[] kind = Classify(solid, w, h, out int[] edgeDist);
-            // ONE central fog hole, decided up front over the whole band rather than
-            // per cell, so the mass shows a single soft fog border instead of a rash of
-            // little ones.
-            bool[] fogMask = ComputeFogMask(kind, w, h);
+            while (queue.Count > 0)
+            {
+                int num3 = queue.Dequeue();
+                int num4 = num3 % width;
+                int num5 = num3 / width;
+                for (int k = -1; k <= 1; k++)
+                {
+                    for (int l = -1; l <= 1; l++)
+                    {
+                        if (l == 0 && k == 0)
+                        {
+                            continue;
+                        }
 
-            // ---- pass 2: terrain, walls, roofs ------------------------------
+                        int num6 = num4 + l;
+                        int num7 = num5 + k;
+                        if (num6 >= 0 && num6 < width && num7 >= 0 && num7 < height)
+                        {
+                            int num8 = num7 * width + num6;
+                            if (array[num8] && !array2[num8])
+                            {
+                                array2[num8] = true;
+                                queue.Enqueue(num8);
+                            }
+                        }
+                    }
+                }
+            }
+
+            bool[] array4 = null;
+            if (flag && !ABOrbitRules.InVacuum(map))
+            {
+                bool[] array5 = Dilate(array3, width, height, 1);
+                for (int m = 0; m < height; m++)
+                {
+                    for (int n = 0; n < width; n++)
+                    {
+                        int num9 = m * width + n;
+                        if (!array5[num9])
+                        {
+                            continue;
+                        }
+
+                        IntVec3 intVec2 = new IntVec3(cellRect.minX + n, 0, cellRect.minZ + m - slot);
+                        if (intVec2.InBounds(map) && roofGrid.RoofAt(intVec2) != null && PregenRoofOver(map, intVec2))
+                        {
+                            if (array4 == null)
+                            {
+                                array4 = new bool[num];
+                            }
+
+                            array4[num9] = true;
+                            array2[num9] = false;
+                        }
+                    }
+                }
+            }
+
+            bool[] noMeadow = (flag ? Dilate(array3, width, height, 2) : null);
+            byte[] array6 = Classify(array2, noMeadow, width, height, out var edgeDistOut);
+            bool[] array7 = ComputeFogMask(array6, width, height);
             ABSettings settings = ABMod.Settings;
-            float soilFrac = Mathf.Clamp(settings != null ? settings.peakSoilFraction : 0.15f, 0f, 0.5f);
-            Perlin soilNoise = new Perlin(0.05, 2.0, 0.5, 5, Rand.Range(0, int.MaxValue), QualityMode.Medium);
-            // An INDEPENDENT moisture field, so damp ground is not just "more fertile":
-            // crossing it with the fertility ramp gives rich-soil pockets and boggy
-            // hollows in different places, which is what makes a plateau read as terrain
-            // rather than as a noise gradient.
-            Perlin moistNoise = new Perlin(0.06, 2.0, 0.5, 4, Rand.Range(0, int.MaxValue), QualityMode.Medium);
-            // §99.A/A2: the BAND's biome, not the map's. `map.Biome` is the surface tile's
-            // answer and it was wrong here for the same reason it was wrong for rock - a
-            // band can run its own biome, and its ground should be that biome's ground.
-            BiomeDef bandBiome = ABBandRocks.BiomeOfBand(map, bands, band);
-            TerrainDef arable = ArableTerrainFor(bandBiome ?? map.Biome);
-            TerrainDef skyGravel = ABBandRocks.GravelFor(map, bandBiome);
-            List<IntVec3> oreCells = new List<IntVec3>();
-            List<IntVec3> fogCells = new List<IntVec3>();
-            List<IntVec3> plateauCells = new List<IntVec3>();
-
-            for (int z = 0; z < h; z++)
+            float num10 = Mathf.Clamp((settings != null) ? settings.peakSoilFraction : 0.15f, 0f, 0.5f);
+            Perlin noise = new Perlin(0.05, 2.0, 0.5, 5, Rand.Range(0, int.MaxValue), QualityMode.Medium);
+            Perlin noise2 = new Perlin(0.06, 2.0, 0.5, 4, Rand.Range(0, int.MaxValue), QualityMode.Medium);
+            BiomeDef biomeDef = ABBandRocks.BiomeOfBand(map, bands, band);
+            TerrainDef terrainDef = ArableTerrainFor(biomeDef ?? map.Biome);
+            TerrainDef terrainDef2 = ABBandRocks.GravelFor(map, biomeDef);
+            List<IntVec3> list = new List<IntVec3>();
+            List<IntVec3> list2 = new List<IntVec3>();
+            List<IntVec3> list3 = new List<IntVec3>();
+            for (int num11 = 0; num11 < height; num11++)
             {
-                for (int x = 0; x < w; x++)
+                for (int num12 = 0; num12 < width; num12++)
                 {
-                    int idx = z * w + x;
-                    IntVec3 c = new IntVec3(rect.minX + x, 0, rect.minZ + z);
-                    if (!c.InBounds(map))
+                    int num13 = num11 * width + num12;
+                    IntVec3 intVec3 = new IntVec3(cellRect.minX + num12, 0, cellRect.minZ + num11);
+                    if (!intVec3.InBounds(map))
                     {
                         continue;
                     }
-                    roofs.SetRoof(c, null);
 
-                    switch (kind[idx])
+                    roofGrid.SetRoof(intVec3, null);
+                    switch (array6[num13])
                     {
-                        case KindLedge:
-                            grid.SetTerrain(c, ABDefOf.AB_MountainTop);
+                        case 1:
+                            terrainGrid.SetTerrain(intVec3, ABDefOf.AB_MountainTop);
                             continue;
-
-                        case KindWall:
+                        case 2:
                         {
-                            ThingDef rock = rocks[ABRockGen.PickIndex(noises, c)];
-                            grid.SetTerrain(c, ABDefOf.AB_MountainTop);
-                            GenSpawn.Spawn(rock, c, map);
-                            roofs.SetRoof(c, RoofDefOf.RoofRockThick);
-                            oreCells.Add(c);
-                            // Only the DEEP interior fogs. The outer wall rows stay
-                            // visible so the mountain reads as a mountain from above -
-                            // fogging the faces lets the fog's soft edge swallow the
-                            // ledge entirely (V1 playtest regression).
-                            if (fogMask[idx])
+                            ThingDef def = rocks[ABRockGen.PickIndex(noises, intVec3)];
+                            terrainGrid.SetTerrain(intVec3, ABDefOf.AB_MountainTop);
+                            GenSpawn.Spawn(def, intVec3, map);
+                            roofGrid.SetRoof(intVec3, RoofDefOf.RoofRockThick);
+                            list.Add(intVec3);
+                            if (array7[num13])
                             {
-                                fogCells.Add(c);
+                                list2.Add(intVec3);
                             }
+
                             continue;
                         }
 
-                        case KindPlateau:
+                        case 3:
                         {
-                            // Plateau ground palette (option A). Every terrain here is
-                            // natural + FadeRough, so vanilla's own terrain layer blends
-                            // all the ground-to-ground boundaries for free; our cap layer
-                            // only has to hand-fade ground against the rock field.
-                            float n = Noise01(soilNoise, c);
-                            float wet = Noise01(moistNoise, c);
-                            TerrainDef t;
-                            if (n < 0.22f)
+                            float num14 = Noise01(noise, intVec3);
+                            float num15 = Noise01(noise2, intVec3);
+                            TerrainDef terrainDef3;
+                            if (!(num14 < 0.22f))
                             {
-                                // Bare stone shoulders, in the plateau's own rock type.
-                                ThingDef rock = rocks[ABRockGen.PickIndex(noises, c)];
-                                t = rock.building?.naturalTerrain ?? skyGravel;
-                            }
-                            else if (n < 0.40f)
-                            {
-                                t = skyGravel;
-                            }
-                            else if (n > 1f - soilFrac)
-                            {
-                                // The fertile heart. §99.o: ask the BAND BIOME what its own
-                                // high-fertility ground is instead of assuming vanilla's
-                                // SoilRich - on Gallatross Graveyard that is
-                                // AB_RichCrackedMud, on a lava field it is volcanic soil.
-                                t = wet > 0.80f
-                                    ? (BiomeGroundAt(bandBiome, 0.95f) ?? TerrainDefOf.SoilRich ?? arable)
-                                    : arable;
+                                if (num14 < 0.4f)
+                                {
+                                    terrainDef3 = terrainDef2;
+                                }
+                                else if (num14 > 1f - num10)
+                                {
+                                    terrainDef3 = ((num15 > 0.8f) ? (BiomeGroundAt(biomeDef, 0.95f) ?? TerrainDefOf.SoilRich ?? terrainDef) : terrainDef);
+                                }
+                                else
+                                {
+                                    terrainDef3 = ((num15 > 0.9f) ? (TerrainDefOf.Mud ?? TerrainDefOf.Soil) : (BiomeGroundAt(biomeDef, 0.6f) ?? TerrainDefOf.Soil));
+                                }
                             }
                             else
                             {
-                                // Ordinary ground, with MUD in the wettest hollows only
-                                // (deliberately rare - mud everywhere reads as damage).
-                                // The dry case is the biome's own mid-fertility terrain.
-                                t = wet > 0.90f
-                                    ? (TerrainDefOf.Mud ?? TerrainDefOf.Soil)
-                                    : (BiomeGroundAt(bandBiome, 0.6f) ?? TerrainDefOf.Soil);
+                                ThingDef thingDef = rocks[ABRockGen.PickIndex(noises, intVec3)];
+                                terrainDef3 = thingDef.building?.naturalTerrain ?? terrainDef2;
                             }
-                            grid.SetTerrain(c, t ?? skyGravel);
-                            plateauCells.Add(c);
+
+                            terrainGrid.SetTerrain(intVec3, terrainDef3 ?? terrainDef2);
+                            list3.Add(intVec3);
                             continue;
                         }
                     }
 
-                    // Outside the mass: what is directly below decides.
-                    IntVec3 below = new IntVec3(c.x, 0, c.z - slot);
-                    RoofDef roofBelow = below.InBounds(map) ? roofs.RoofAt(below) : null;
-                    if (roofBelow != null && !roofBelow.isNatural)
+                    IntVec3 intVec4 = new IntVec3(intVec3.x, 0, intVec3.z - slot);
+                    RoofDef roofDef2 = (intVec4.InBounds(map) ? roofGrid.RoofAt(intVec4) : null);
+                    if (array4 != null && array4[num13])
                     {
-                        grid.SetTerrain(c, ABDefOf.AB_RoofSurface);
+                        terrainGrid.SetTerrain(intVec3, ABDefOf.AB_RoofSurface);
                     }
-                    else if (roofBelow != null && roofBelow.isNatural)
+                    else if (roofDef2 != null && !roofDef2.isNatural)
                     {
-                        grid.SetTerrain(c, ABDefOf.AB_MountainTop);
+                        terrainGrid.SetTerrain(intVec3, ABOrbitRules.ProjectsUpperLevel(map, intVec4) ? ABDefOf.AB_RoofSurface : aB_OpenAir);
+                    }
+                    else if (roofDef2 != null && roofDef2.isNatural)
+                    {
+                        terrainGrid.SetTerrain(intVec3, ABDefOf.AB_MountainTop);
                     }
                     else
                     {
-                        grid.SetTerrain(c, air);
+                        terrainGrid.SetTerrain(intVec3, aB_OpenAir);
                     }
                 }
             }
 
-            for (int i = 0; i < fogCells.Count; i++)
+            for (int num16 = 0; num16 < list2.Count; num16++)
             {
-                IntVec3 c = fogCells[i];
-                map.fogGrid.Refog(new CellRect(c.x, c.z, 1, 1));
+                IntVec3 intVec5 = list2[num16];
+                map.fogGrid.Refog(new CellRect(intVec5.x, intVec5.z, 1, 1));
             }
-            if (oreCells.Count > 0)
+
+            if (list.Count > 0)
             {
-                ABOreGen.ScatterOres(map, oreCells,
-                    Mathf.Clamp(settings?.basementOreDensity ?? 6f, 0f, 12f) * 0.5f);
+                ABOreGen.ScatterOres(map, list, Mathf.Clamp(settings?.basementOreDensity ?? 6f, 0f, 12f) * 0.5f);
             }
-            // ---- pass 3: the alpine plateau (option D) ----------------------
-            // Order is deliberate: tarns first so a shoreline exists before anything is
-            // scattered near it, then rim scree, then flora last so it plants against
-            // the finished terrain (and never into open water, which has no fertility).
-            CarveTarns(map, rect, w, h, kind, edgeDist, settings);
-            ScatterRimScree(map, rect, w, h, kind, edgeDist, rocks, noises);
+
+            CarveTarns(map, cellRect, width, height, array6, edgeDistOut, settings);
+            ScatterRimScree(map, cellRect, width, height, array6, edgeDistOut, rocks, noises);
             if (ABBandDressing.WillDressFlora(map))
             {
-                // §99: vanilla's own plant pass dresses this band a moment later, at the
-                // band biome's true density. That is the user's explicit choice over raising
-                // the constants below, and it also DROPS THE ALPINE RIM CURVE - a summit
-                // meadow should read like the ground it sits above, which is what "parity"
-                // means and which the exposure lerp deliberately prevented.
-                //
-                // Registered as a fallback rather than deleted: if the biome offers nothing
-                // that can legally stand on plateau soil and gravel, vanilla's pass places
-                // zero and this seeder - which weights by fertility and relaxes the
-                // temperature gate - is called after all. Rule 33: a filter that can reject
-                // everything must say so, and something must answer for it.
-                List<IntVec3> fallbackCells = plateauCells;
-                int[] fallbackEdge = edgeDist;
-                CellRect fallbackRect = rect;
-                int fallbackWidth = w;
-                ABBandDressing.RegisterFloraFallback(band, () => SeedFlora(map, fallbackCells,
-                    settings, fallbackEdge, fallbackRect, fallbackWidth));
+                List<IntVec3> fallbackCells = list3;
+                int[] fallbackEdge = edgeDistOut;
+                CellRect fallbackRect = cellRect;
+                int fallbackWidth = width;
+                ABBandDressing.RegisterFloraFallback(band, () =>
+                {
+                    SeedFlora(map, fallbackCells, settings, fallbackEdge, fallbackRect, fallbackWidth);
+                });
             }
             else
             {
-                SeedFlora(map, plateauCells, settings, edgeDist, rect, w);
+                SeedFlora(map, list3, settings, edgeDistOut, cellRect, width);
             }
         }
 
@@ -580,108 +550,6 @@ namespace AsAboveSoBelow
                 + " plateau cells (biome " + (biome.defName ?? "?") + ", density "
                 + density.ToString("0.0")
                 + (picker.TemperatureGateRelaxed ? ", temperature gate relaxed" : "") + ").");
-        }
-
-        /// <summary>Edge-distance BFS then meadow/terrace classification. Band-local
-        /// indices throughout: the band is a contiguous rect, so a local w*h grid keeps
-        /// this independent of map size.</summary>
-        private static byte[] Classify(bool[] solid, int w, int h, out int[] edgeDistOut)
-        {
-            int count = w * h;
-            byte[] kind = new byte[count];
-            int[] edgeDist = new int[count];
-            Queue<int> queue = new Queue<int>();
-            for (int i = 0; i < count; i++)
-            {
-                if (solid[i])
-                {
-                    edgeDist[i] = int.MaxValue;
-                }
-                else
-                {
-                    edgeDist[i] = 0;
-                    queue.Enqueue(i);
-                }
-            }
-            while (queue.Count > 0)
-            {
-                int cur = queue.Dequeue();
-                int cx = cur % w;
-                int cz = cur / w;
-                int d = edgeDist[cur] + 1;
-                for (int dz = -1; dz <= 1; dz++)
-                {
-                    for (int dx = -1; dx <= 1; dx++)
-                    {
-                        if (dx == 0 && dz == 0)
-                        {
-                            continue;
-                        }
-                        int nx = cx + dx;
-                        int nz = cz + dz;
-                        if (nx < 0 || nz < 0 || nx >= w || nz >= h)
-                        {
-                            continue;
-                        }
-                        int nIdx = nz * w + nx;
-                        if (edgeDist[nIdx] > d)
-                        {
-                            edgeDist[nIdx] = d;
-                            queue.Enqueue(nIdx);
-                        }
-                    }
-                }
-            }
-
-            // Handed back for the alpine pass: tarn placement and flora exposure both
-            // need "how far is this cell from a drop", and recomputing the BFS would be
-            // both wasteful and a chance to disagree with the classifier.
-            edgeDistOut = edgeDist;
-
-            ABSettings gs = ABMod.Settings;
-            bool naturalistic = gs == null || gs.naturalPeaks;
-            if (!naturalistic)
-            {
-                for (int i = 0; i < count; i++)
-                {
-                    if (solid[i])
-                    {
-                        kind[i] = edgeDist[i] <= 1 ? KindLedge : KindWall;
-                    }
-                }
-                return kind;
-            }
-
-            float cutoff = Mathf.Clamp(gs?.peakMeadowCutoff ?? MeadowCutoffDefault, 0.45f, 0.75f);
-            float meadowScale = Mathf.Clamp(gs?.peakMeadowScale ?? 0.024f, 0.012f, 0.048f);
-            int terraceMax = Mathf.Clamp(gs?.peakTerraceMax ?? 4, 1, 6);
-            Perlin meadowNoise = new Perlin(meadowScale, 2.0, 0.5, 5, Rand.Range(0, int.MaxValue), QualityMode.Medium);
-            Perlin terraceNoise = new Perlin(0.035, 2.0, 0.5, 4, Rand.Range(0, int.MaxValue), QualityMode.Medium);
-
-            for (int i = 0; i < count; i++)
-            {
-                if (!solid[i])
-                {
-                    continue;
-                }
-                int x = i % w;
-                int z = i / w;
-                IntVec3 c = new IntVec3(x, 0, z);
-                int ed = edgeDist[i];
-                if (Noise01(meadowNoise, c) > cutoff)
-                {
-                    // Open zone, but ALWAYS one cell back from the mass edge: the
-                    // outermost ring stays a lip, or the rock face below stops
-                    // rendering (V1 run #43 regression).
-                    kind[i] = ed <= 1 ? KindLedge : KindPlateau;
-                }
-                else
-                {
-                    kind[i] = ed <= TerraceWidth(terraceNoise, c, terraceMax) ? KindLedge : KindWall;
-                }
-            }
-            Despeckle(kind, solid, w, h, 2);
-            return kind;
         }
 
         /// <summary>
@@ -985,5 +853,173 @@ namespace AsAboveSoBelow
             }
             return TerrainDefOf.Soil;
         }
+        private static byte[] Classify(bool[] solid, bool[] noMeadow, int w, int h, out int[] edgeDistOut)
+        {
+            int num = w * h;
+            byte[] array = new byte[num];
+            int[] array2 = new int[num];
+            Queue<int> queue = new Queue<int>();
+            for (int i = 0; i < num; i++)
+            {
+                if (solid[i])
+                {
+                    array2[i] = int.MaxValue;
+                    continue;
+                }
+
+                array2[i] = 0;
+                queue.Enqueue(i);
+            }
+
+            while (queue.Count > 0)
+            {
+                int num2 = queue.Dequeue();
+                int num3 = num2 % w;
+                int num4 = num2 / w;
+                int num5 = array2[num2] + 1;
+                for (int j = -1; j <= 1; j++)
+                {
+                    for (int k = -1; k <= 1; k++)
+                    {
+                        if (k == 0 && j == 0)
+                        {
+                            continue;
+                        }
+
+                        int num6 = num3 + k;
+                        int num7 = num4 + j;
+                        if (num6 >= 0 && num7 >= 0 && num6 < w && num7 < h)
+                        {
+                            int num8 = num7 * w + num6;
+                            if (array2[num8] > num5)
+                            {
+                                array2[num8] = num5;
+                                queue.Enqueue(num8);
+                            }
+                        }
+                    }
+                }
+            }
+
+            edgeDistOut = array2;
+            ABSettings settings = ABMod.Settings;
+            if (settings != null && !settings.naturalPeaks)
+            {
+                for (int l = 0; l < num; l++)
+                {
+                    if (solid[l])
+                    {
+                        array[l] = (byte)((array2[l] <= 1) ? 1 : 2);
+                    }
+                }
+
+                return array;
+            }
+
+            float num9 = Mathf.Clamp(settings?.peakMeadowCutoff ?? 0.62f, 0.45f, 0.75f);
+            float num10 = Mathf.Clamp(settings?.peakMeadowScale ?? 0.024f, 0.012f, 0.048f);
+            int max = Mathf.Clamp(settings?.peakTerraceMax ?? 4, 1, 6);
+            Perlin noise = new Perlin(num10, 2.0, 0.5, 5, Rand.Range(0, int.MaxValue), QualityMode.Medium);
+            Perlin noise2 = new Perlin(0.035, 2.0, 0.5, 4, Rand.Range(0, int.MaxValue), QualityMode.Medium);
+            for (int m = 0; m < num; m++)
+            {
+                if (solid[m])
+                {
+                    int newX = m % w;
+                    int newZ = m / w;
+                    IntVec3 c = new IntVec3(newX, 0, newZ);
+                    int num11 = array2[m];
+                    if ((noMeadow == null || !noMeadow[m]) && Noise01(noise, c) > num9)
+                    {
+                        array[m] = (byte)((num11 <= 1) ? 1 : 3);
+                    }
+                    else
+                    {
+                        array[m] = (byte)((num11 <= TerraceWidth(noise2, c, max)) ? 1 : 2);
+                    }
+                }
+            }
+
+            Despeckle(array, solid, w, h, 2);
+            return array;
+        }
+
+        private static bool[] Dilate(bool[] src, int w, int h, int radius)
+        {
+            bool[] array = new bool[src.Length];
+            for (int i = 0; i < h; i++)
+            {
+                for (int j = 0; j < w; j++)
+                {
+                    if (!src[i * w + j])
+                    {
+                        continue;
+                    }
+
+                    int num = Math.Max(0, j - radius);
+                    int num2 = Math.Min(w - 1, j + radius);
+                    int num3 = Math.Max(0, i - radius);
+                    int num4 = Math.Min(h - 1, i + radius);
+                    for (int k = num3; k <= num4; k++)
+                    {
+                        for (int l = num; l <= num2; l++)
+                        {
+                            array[k * w + l] = true;
+                        }
+                    }
+                }
+            }
+
+            return array;
+        }
+
+        internal static bool PregenRoofOver(Map map, IntVec3 below)
+        {
+            if (!below.InBounds(map))
+            {
+                return false;
+            }
+
+            if (BuiltBelow(map, below))
+            {
+                return true;
+            }
+
+            RoofGrid roofGrid = map.roofGrid;
+            for (int i = 0; i < 8; i++)
+            {
+                IntVec3 intVec = below + GenAdj.AdjacentCells[i];
+                if (intVec.InBounds(map) && roofGrid.RoofAt(intVec) != null && BuiltBelow(map, intVec))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        internal static bool BuiltBelow(Map map, IntVec3 below)
+        {
+            return below.InBounds(map) && BuiltBelow(map, below, map.edificeGrid[below], map.roofGrid.RoofAt(below));
+        }
+
+        private static bool BuiltBelow(Map map, IntVec3 below, Building edifice, RoofDef roof)
+        {
+            if (roof != null && !roof.isNatural)
+            {
+                return true;
+            }
+
+            if (edifice != null && edifice.def != null && !edifice.def.mineable && (edifice.def.building == null || !edifice.def.building.isNaturalRock) && (edifice.def.building == null || edifice.def.building.artificialForMeditationPurposes))
+            {
+                return true;
+            }
+
+            TerrainDef terrainDef = map.terrainGrid.TerrainAt(below);
+            return terrainDef != null && !terrainDef.natural && (ABMod.ModContent == null || terrainDef.modContentPack != ABMod.ModContent);
+        }
+
+        private const int NoMeadowRadius = 2;
+
     }
 }

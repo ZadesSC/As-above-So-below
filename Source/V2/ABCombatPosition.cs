@@ -1,3 +1,6 @@
+using System.Collections.Generic;
+using System.Reflection;
+using System.Reflection.Emit;
 using System;
 using HarmonyLib;
 using RimWorld;
@@ -62,6 +65,8 @@ namespace AsAboveSoBelow
 
         public static void ResetCounters()
         {
+            standStillLoopsBroken = 0;
+            vanillaSearches = 0;
             solvedInPlace = 0;
             solvedByStep = 0;
             noPosition = 0;
@@ -69,8 +74,7 @@ namespace AsAboveSoBelow
 
         public static string CounterReport()
         {
-            return "castPos: inPlace=" + solvedInPlace + " stepped=" + solvedByStep
-                + " none=" + noPosition;
+            return "castPos: vanillaSearches=" + vanillaSearches + (vanillaSearchArmed ? "" : (" [vanilla search NOT ARMED, " + ArmedCount + "/3 methods]")) + " | fallback inPlace=" + solvedInPlace + " stepped=" + solvedByStep + " none=" + noPosition + " | standStillLoopsBroken=" + standStillLoopsBroken;
         }
 
         /// <summary>
@@ -92,65 +96,184 @@ namespace AsAboveSoBelow
             Pawn caster = req.caster;
             Thing target = req.target;
             Verb verb = req.verb;
-            if (caster == null || target == null || verb == null || !caster.Spawned
-                || !target.Spawned)
+            if (caster == null || target == null || verb == null || !caster.Spawned || !target.Spawned)
             {
                 return false;
             }
+
             Map map = caster.Map;
             LocalTargetInfo targ = target;
-
-            // Standing still is the preferred answer: it costs no movement, keeps whatever
-            // cover the pawn already has, and TryGiveJob turns `dest == pawn.Position` into
-            // Wait_Combat, which is exactly "hold here and shoot".
-            if (verb.CanHitTargetFrom(caster.Position, targ))
+            int num = ABBands.BandOf(map, caster.Position);
+            ABBandMap aBBandMap = ABBands.CompOf(map);
+            float num2 = req.maxRangeFromTarget * req.maxRangeFromTarget;
+            bool flag = num2 > 0.01f && num2 < 250000f && aBBandMap != null;
+            IntVec3 intVec = aBBandMap?.Translate(target.Position, num) ?? target.Position;
+            if ((!flag || (float)(caster.Position - intVec).LengthHorizontalSquared <= num2) && verb.CanHitTargetFrom(caster.Position, targ))
             {
                 dest = caster.Position;
                 solvedInPlace++;
                 return true;
             }
 
-            int band = ABBands.BandOf(map, caster.Position);
-            int count = Mathf.Min(GenRadial.NumCellsInRadius(SearchRadius),
-                GenRadial.RadialPattern.Length);
-            ABBandMap bands = ABBands.CompOf(map);
-            for (int i = 0; i < count; i++)
+            int num3 = Mathf.Min(GenRadial.NumCellsInRadius(12f), GenRadial.RadialPattern.Length);
+            for (int i = 0; i < num3; i++)
             {
-                IntVec3 c = caster.Position + GenRadial.RadialPattern[i];
-                // ⚠ THE BAND TEST IS NOT REDUNDANT WITH InBounds. GenRadial walks a square
-                // neighbourhood in raw cell space, and on a banded map a radius of 12 from a
-                // pawn near a band edge reaches straight over the gutter into the next level
-                // (§1's "radius search wider than the gutter"). Without this the pawn could be
-                // sent to stand on another floor entirely.
-                if (!c.InBounds(map) || bands == null || bands.BandOf(c) != band
-                    || bands.InGutter(c))
+                IntVec3 intVec2 = caster.Position + GenRadial.RadialPattern[i];
+                if (intVec2.InBounds(map) && aBBandMap != null && aBBandMap.BandOf(intVec2) == num && !aBBandMap.InGutter(intVec2) && (!flag || !((float)(intVec2 - intVec).LengthHorizontalSquared > num2)) && intVec2.Standable(map) && intVec2.WalkableBy(map, caster) && (req.validator == null || req.validator(intVec2)) && map.pawnDestinationReservationManager.CanReserve(intVec2, caster) && verb.CanHitTargetFrom(intVec2, targ))
                 {
-                    continue;
+                    dest = intVec2;
+                    solvedByStep++;
+                    return true;
                 }
-                if (!c.Standable(map) || !c.WalkableBy(map, caster))
-                {
-                    continue;
-                }
-                if (req.validator != null && !req.validator(c))
-                {
-                    continue;
-                }
-                if (!map.pawnDestinationReservationManager.CanReserve(c, caster))
-                {
-                    continue;
-                }
-                if (!verb.CanHitTargetFrom(c, targ))
-                {
-                    continue;
-                }
-                // GenRadial is ordered by increasing distance, so the first hit is nearest.
-                dest = c;
-                solvedByStep++;
-                return true;
             }
+
             noPosition++;
             return false;
         }
+        internal static bool StandStillLoopTrips(Pawn caster, Thing target, IntVec3 dest)
+        {
+            if (caster == null || dest != caster.Position)
+            {
+                loopPawn = null;
+                loopTarget = null;
+                return false;
+            }
+
+            int frameCount = Time.frameCount;
+            int num = ((Find.TickManager != null) ? Find.TickManager.TicksGame : 0);
+            if (caster == loopPawn && target == loopTarget && frameCount == loopFrame && num == loopTick)
+            {
+                loopCount++;
+            }
+            else
+            {
+                loopPawn = caster;
+                loopTarget = target;
+                loopFrame = frameCount;
+                loopTick = num;
+                loopCount = 1;
+            }
+
+            if (loopCount <= 4)
+            {
+                return false;
+            }
+
+            standStillLoopsBroken++;
+            Log.WarningOnce("[As above, So below] " + caster.LabelShortCap + " was told to stand still and shoot " + ((target != null) ? target.LabelShortCap : "its target") + " on another level " + loopCount + " times in one tick by " + ((caster.jobs?.curDriver != null) ? caster.jobs.curDriver.GetType().FullName : "an unknown job driver") + ", which re-checks the position with its own rule and asks again. The search now answers no position so the job ends instead of overflowing the stack; a '10 jobs in one tick' error for this pawn may follow and is harmless. Please report the driver named here.", 2822389);
+            return true;
+        }
+
+        internal static IEnumerable<CodeInstruction> RewritePositionReads(IEnumerable<CodeInstruction> instructions, int slot, string where)
+        {
+            MethodInfo methodInfo = AccessTools.PropertyGetter(typeof(Thing), "Position");
+            MethodInfo operand = AccessTools.Method(typeof(ABCombatPosition), "PositionOf");
+            FieldInfo fieldInfo = AccessTools.Field(typeof(CastPositionRequest), "target");
+            List<CodeInstruction> list = new List<CodeInstruction>(instructions);
+            int num = 0;
+            int num2 = 0;
+            for (int i = 0; i < list.Count; i++)
+            {
+                if ((list[i].opcode == OpCodes.Callvirt || list[i].opcode == OpCodes.Call) && list[i].operand as MethodInfo == methodInfo)
+                {
+                    if (i > 0 && list[i - 1].opcode == OpCodes.Ldfld && list[i - 1].operand as FieldInfo == fieldInfo)
+                    {
+                        num2++;
+                    }
+
+                    list[i].opcode = OpCodes.Call;
+                    list[i].operand = operand;
+                    num++;
+                }
+            }
+
+            armedMethods[slot] = num2 > 0;
+            if (num2 == 0)
+            {
+                Log.WarningOnce("[As above, So below] cast position: no req.target.Position read found in CastPositionFinder." + where + " (" + num + " other Position reads); cross-level firing positions fall back to the nearest-cell search, which ignores cover.", 2822400 + slot);
+            }
+
+            return list;
+        }
+
+        internal static bool ScopeEnemyBelow(IntVec3 shooterLoc)
+        {
+            return scopeTarget != null && scopeEnemyBelow && shooterLoc == scopeLocal && UnityData.IsInMainThread;
+        }
+
+        internal static void Exit(ScopeState previous)
+        {
+            if (previous.entered)
+            {
+                scopeTarget = previous.target;
+                scopeLocal = previous.local;
+                scopeEnemyBelow = previous.enemyBelow;
+            }
+        }
+
+        internal static ScopeState Enter(Thing target, IntVec3 local, bool enemyBelow)
+        {
+            ScopeState result = new ScopeState
+            {
+                target = scopeTarget,
+                local = scopeLocal,
+                enemyBelow = scopeEnemyBelow,
+                entered = true
+            };
+            scopeTarget = target;
+            scopeLocal = local;
+            scopeEnemyBelow = enemyBelow;
+            vanillaSearches++;
+            return result;
+        }
+
+        public static IntVec3 PositionOf(Thing t)
+        {
+            if (t != null && t == scopeTarget)
+            {
+                return scopeLocal;
+            }
+
+            return t.Position;
+        }
+
+        private static int ArmedCount => (armedMethods[0] ? 1 : 0) + (armedMethods[1] ? 1 : 0) + (armedMethods[2] ? 1 : 0);
+
+        internal static bool vanillaSearchArmed => armedMethods[0] && armedMethods[1] && armedMethods[2];
+
+        public static int standStillLoopsBroken;
+
+        private static int loopCount;
+
+        private static int loopTick = -1;
+
+        private static int loopFrame = -1;
+
+        private static Thing loopTarget;
+
+        private static Pawn loopPawn;
+
+        private const int StandStillLoopLimit = 4;
+
+        public static int vanillaSearches;
+
+        private static readonly bool[] armedMethods = new bool[3];
+
+        private static bool scopeEnemyBelow;
+
+        private static IntVec3 scopeLocal;
+
+        private static Thing scopeTarget;
+
+        public struct ScopeState
+        {
+            public Thing target;
+            public IntVec3 local;
+            public bool enemyBelow;
+            public bool entered;
+            public bool fallback;
+        }
+
     }
 
     /// <summary>
@@ -163,43 +286,99 @@ namespace AsAboveSoBelow
     [HarmonyPatch(typeof(CastPositionFinder), nameof(CastPositionFinder.TryFindCastPosition))]
     public static class Patch_CastPositionFinder_ABCrossBand
     {
-        private static bool Prefix(CastPositionRequest newReq, ref IntVec3 dest,
-            ref bool __result)
+        private static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
         {
+            return ABCombatPosition.RewritePositionReads(instructions, 0, "TryFindCastPosition");
+        }
+
+        private static void Finalizer(ABCombatPosition.ScopeState __state)
+        {
+            ABCombatPosition.Exit(__state);
+        }
+
+        private static void Postfix(CastPositionRequest newReq, ref IntVec3 dest, ref bool __result, ABCombatPosition.ScopeState __state)
+        {
+            if (__state.fallback && !__result)
+            {
+                try
+                {
+                    __result = ABCombatPosition.TryFindBandLocalCastPosition(newReq, out dest);
+                    if (ABV2Debug.LogCombat)
+                    {
+                        ABV2Debug.Combat("cast position for " + newReq.caster?.LabelShortCap + " vs " + newReq.target?.LabelShortCap + " across bands (fallback search): " + (__result ? dest.ToString() : "NONE"));
+                    }
+                }
+                catch (Exception e)
+                {
+                    ABGuard.Disable(ABGuard.Combat, e, "V2 cross-band cast position fallback");
+                }
+            }
+            else if (__state.entered && ABV2Debug.LogCombat)
+            {
+                ABV2Debug.Combat("cast position for " + newReq.caster?.LabelShortCap + " across bands: " + (__result ? dest.ToString() : "NONE"));
+            }
+
+            if (__result && (__state.entered || __state.fallback) && ABCombatPosition.StandStillLoopTrips(newReq.caster, newReq.target, dest))
+            {
+                __result = false;
+            }
+        }
+
+        private static void Prefix(ref CastPositionRequest newReq, out ABCombatPosition.ScopeState __state)
+        {
+            __state = default;
             try
             {
                 Pawn caster = newReq.caster;
                 Thing target = newReq.target;
-                if (caster == null || target == null || !caster.Spawned || !target.Spawned
-                    || !ABCombatV2.Enabled)
+                if (caster == null || target == null || !caster.Spawned || !target.Spawned || !ABCombatV2.Enabled)
                 {
-                    return true;
+                    return;
                 }
+
                 Map map = caster.Map;
                 if (target.Map != map)
                 {
-                    return true;
+                    return;
                 }
+
                 ABBandMap bands = ABBands.CompOf(map);
                 if (bands == null || !bands.Banded)
                 {
-                    return true;
+                    return;
                 }
-                if (bands.BandOf(caster.Position) == bands.BandOf(target.Position))
+
+                int band = bands.BandOf(caster.Position);
+                if (band == bands.BandOf(target.Position))
                 {
-                    return true; // one level: vanilla's search is correct and much better
+                    return;
                 }
-                __result = ABCombatPosition.TryFindBandLocalCastPosition(newReq, out dest);
-                ABV2Debug.Combat("cast position for " + caster.LabelShortCap + " vs "
-                    + target.LabelShortCap + " across bands: "
-                    + (__result ? dest.ToString() : "NONE"));
-                return false;
+
+                if (ABCombatPosition.vanillaSearchArmed)
+                {
+                    Func<IntVec3, bool> inner = newReq.validator;
+                    newReq.validator = (IntVec3 c) => bands.BandOf(c) == band && !bands.InGutter(c) && (inner == null || inner(c));
+                    __state = ABCombatPosition.Enter(target, bands.Translate(target.Position, band), bands.BandOf(target.Position) < band);
+                    if (ABV2Debug.LogCombat)
+                    {
+                        ABV2Debug.Combat("cast position for " + caster.LabelShortCap + " vs " + target.LabelShortCap + " across bands: vanilla search, target carried to " + bands.Translate(target.Position, band).ToString());
+                    }
+                }
+                else
+                {
+                    Func<IntVec3, bool> innerFallback = newReq.validator;
+                    newReq.validator = (IntVec3 c) => bands.BandOf(c) == band && !bands.InGutter(c) && (innerFallback == null || innerFallback(c));
+                    __state = new ABCombatPosition.ScopeState
+                    {
+                        fallback = true
+                    };
+                }
             }
             catch (Exception e)
             {
                 ABGuard.Disable(ABGuard.Combat, e, "V2 cross-band cast position");
             }
-            return true;
         }
+
     }
 }

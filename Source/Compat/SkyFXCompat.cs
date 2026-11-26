@@ -56,56 +56,57 @@ namespace AsAboveSoBelow
 
         private static void InstallSunAndMoonBeams()
         {
-            Type effecterT = AccessTools.TypeByName("SunAndMoonBeams.SubEffecter_SunLightBeam");
-            if (effecterT == null)
+            Type type = AccessTools.TypeByName("SunAndMoonBeams.SubEffecter_SunLightBeam");
+            if (type == null)
             {
-                return; // mod not installed - the normal case, no noise
+                return;
             }
+
             try
             {
-                MethodInfo tick = AccessTools.Method(effecterT, "SubEffectTick");
-                MethodInfo beam = AccessTools.Method(effecterT, "CreateSingleBeam");
-                if (tick == null || beam == null)
+                MethodInfo methodInfo = AccessTools.Method(type, "SubEffectTick");
+                MethodInfo methodInfo2 = AccessTools.Method(type, "CreateSingleBeam");
+                if (methodInfo == null || methodInfo2 == null)
                 {
-                    Log.WarningOnce(ABLog.Tag + " Sun & Moon Beams is present but its"
-                        + " effecter changed shape; sunbeams will ignore levels this"
-                        + " session.", 0x2B10D0);
+                    Log.WarningOnce("[As above, So below] Sun & Moon Beams is present but its effecter changed shape; sunbeams will ignore levels this session.", 2822352);
                     return;
                 }
-                HarmonyBoot.Harmony.Patch(tick, prefix: new HarmonyMethod(
-                    typeof(SkyFXCompat), nameof(GateSubEffectTick)));
-                HarmonyBoot.Harmony.Patch(beam, prefix: new HarmonyMethod(
-                    typeof(SkyFXCompat), nameof(RemapBeam)));
 
-                Type managerT = AccessTools.TypeByName("SunAndMoonBeams.SunLightManager");
-                MethodInfo create = managerT == null
-                    ? null : AccessTools.Method(managerT, "CreateSunLight");
-                fSunLightThing = managerT == null
-                    ? null : AccessTools.Field(managerT, "sunLightThing");
-                fInitialized = managerT == null
-                    ? null : AccessTools.Field(managerT, "initialized");
-                fCreationAttempted = managerT == null
-                    ? null : AccessTools.Field(managerT, "creationAttempted");
-                fCreationAttemptCount = managerT == null
-                    ? null : AccessTools.Field(managerT, "creationAttemptCount");
-                if (create != null && fSunLightThing != null && fInitialized != null
-                    && fCreationAttempted != null && fCreationAttemptCount != null)
+                HarmonyBoot.Harmony.Patch(methodInfo, new HarmonyMethod(typeof(SkyFXCompat), "GateSubEffectTick"));
+                HarmonyBoot.Harmony.Patch(methodInfo2, new HarmonyMethod(typeof(SkyFXCompat), "RemapBeam"));
+                MethodInfo methodInfo3 = AccessTools.Method(type, "SetMap");
+                fCoverageMode = AccessTools.Field(type, "coverageMode");
+                fCoverageHeight = AccessTools.Field(type, "coverageHeight");
+                fDynamicBurstCount = AccessTools.Field(type, "dynamicBurstCount");
+                if (methodInfo3 != null && fCoverageMode != null && fCoverageHeight != null && fDynamicBurstCount != null)
                 {
-                    HarmonyBoot.Harmony.Patch(create, prefix: new HarmonyMethod(
-                        typeof(SkyFXCompat), nameof(PlaceAnchorOnSurface)));
+                    HarmonyBoot.Harmony.Patch(methodInfo3, null, new HarmonyMethod(typeof(SkyFXCompat), "RescaleToBand"));
                 }
                 else
                 {
-                    Log.WarningOnce(ABLog.Tag + " Sun & Moon Beams' manager changed shape;"
-                        + " its sun anchor keeps vanilla placement (may fail to spawn on"
-                        + " banded maps, leaving no beams).", 0x2B10D1);
+                    Log.WarningOnce("[As above, So below] Sun & Moon Beams' beam coverage changed shape; beams keep whole-stack density and may look too dense on a banded map.", 2822361);
                 }
+
+                Type type2 = AccessTools.TypeByName("SunAndMoonBeams.SunLightManager");
+                MethodInfo methodInfo4 = ((type2 == null) ? null : AccessTools.Method(type2, "CreateSunLight"));
+                fSunLightThing = ((type2 == null) ? null : AccessTools.Field(type2, "sunLightThing"));
+                fInitialized = ((type2 == null) ? null : AccessTools.Field(type2, "initialized"));
+                fCreationAttempted = ((type2 == null) ? null : AccessTools.Field(type2, "creationAttempted"));
+                fCreationAttemptCount = ((type2 == null) ? null : AccessTools.Field(type2, "creationAttemptCount"));
+                if (methodInfo4 != null && fSunLightThing != null && fInitialized != null && fCreationAttempted != null && fCreationAttemptCount != null)
+                {
+                    HarmonyBoot.Harmony.Patch(methodInfo4, new HarmonyMethod(typeof(SkyFXCompat), "PlaceAnchorOnSurface"));
+                }
+                else
+                {
+                    Log.WarningOnce("[As above, So below] Sun & Moon Beams' manager changed shape; its sun anchor keeps vanilla placement (may fail to spawn on banded maps, leaving no beams).", 2822353);
+                }
+
                 ABLog.Dev("Sun & Moon Beams bridge installed (gate + remap + anchor).");
             }
-            catch (Exception e)
+            catch (Exception ex)
             {
-                Log.WarningOnce(ABLog.Tag + " Sun & Moon Beams bridge failed to install: "
-                    + e.Message, 0x2B10D2);
+                Log.WarningOnce("[As above, So below] Sun & Moon Beams bridge failed to install: " + ex.Message, 2822354);
             }
         }
 
@@ -147,62 +148,52 @@ namespace AsAboveSoBelow
                 {
                     return true;
                 }
-                ABBandMap bands = ABBands.CompOf(map);
-                if (map == null || bands == null || !bands.Banded)
+
+                ABBandMap aBBandMap = ABBands.CompOf(map);
+                if (map == null || aBBandMap == null || !aBBandMap.Banded)
                 {
                     return true;
                 }
+
                 if (ABBandView.CurrentLevel(map) < 0)
-                {
-                    return false; // belt + braces under the tick gate
-                }
-                float fx = Fold(position.x, map.Size.x);
-                float fz = Fold(position.z, map.Size.z);
-                bool moved = fx != position.x || fz != position.z;
-                IntVec3 cell = new Vector3(fx, 0f, fz).ToIntVec3();
-                if (!cell.InBounds(map) || bands.InGutter(cell))
                 {
                     return false;
                 }
-                int viewBand = ABBandView.CurrentBand(map);
-                int srcBand = bands.BandOf(cell);
-                if (srcBand != viewBand)
-                {
-                    int dz = (viewBand - srcBand) * bands.Slot;
-                    fz += dz;
-                    cell = new IntVec3(cell.x, 0, cell.z + dz);
-                    if (!cell.InBounds(map) || bands.InGutter(cell))
-                    {
-                        return false;
-                    }
-                    moved = true;
-                }
-                if (moved)
-                {
-                    RoofDef roof = map.roofGrid.RoofAt(cell);
-                    if (roof != null && roof.isThickRoof)
-                    {
-                        return false; // mirror their avoidThickRoof default
-                    }
-                }
-                position = new Vector3(fx, position.y, fz);
-                return true;
-            }
-            catch (Exception e)
-            {
-                Log.ErrorOnce(ABLog.Tag + " sunbeam remap threw: " + e, 0x2B10D4);
-                return true;
-            }
-        }
 
-        private static float Fold(float v, float size)
-        {
-            if (size <= 0f)
-            {
-                return v;
+                IntVec3 c = position.ToIntVec3();
+                if (!c.InBounds(map) || aBBandMap.InGutter(c))
+                {
+                    return false;
+                }
+
+                int num = ABBandView.CurrentBand(map);
+                int num2 = aBBandMap.BandOf(c);
+                if (num2 == num)
+                {
+                    return true;
+                }
+
+                int num3 = (num - num2) * aBBandMap.Slot;
+                IntVec3 c2 = new IntVec3(c.x, 0, c.z + num3);
+                if (!c2.InBounds(map) || aBBandMap.InGutter(c2))
+                {
+                    return false;
+                }
+
+                RoofDef roofDef = map.roofGrid.RoofAt(c2);
+                if (roofDef != null && roofDef.isThickRoof)
+                {
+                    return false;
+                }
+
+                position = new Vector3(position.x, position.y, position.z + (float)num3);
+                return true;
             }
-            float m = v % size;
-            return m < 0f ? m + size : m;
+            catch (Exception ex)
+            {
+                Log.ErrorOnce("[As above, So below] sunbeam remap threw: " + ex, 2822356);
+                return true;
+            }
         }
 
         /// <summary>Clause (a): home the anchor on the surface band. Full reimplementation
@@ -308,5 +299,48 @@ namespace AsAboveSoBelow
                 return true;
             }
         }
+        private static float AreaFactor(float area)
+        {
+            float num = area / 90000f;
+            return (num > 1f) ? Mathf.Sqrt(num) : num;
+        }
+
+        public static void RescaleToBand(object __instance, Map map)
+        {
+            try
+            {
+                if (!ABGuard.On(ABGuard.Weather) || __instance == null || map == null)
+                {
+                    return;
+                }
+
+                ABBandMap aBBandMap = ABBands.CompOf(map);
+                if (aBBandMap != null && aBBandMap.Banded && aBBandMap.bandHeight > 0 && fCoverageMode.GetValue(__instance)is int num && num == 1)
+                {
+                    float num2 = aBBandMap.bandHeight;
+                    fCoverageHeight.SetValue(__instance, num2 * 1.5f);
+                    float num3 = (float)map.Size.x * (float)map.Size.z;
+                    float num4 = (float)map.Size.x * num2;
+                    if (num3 > 0f && num4 > 0f && fDynamicBurstCount.GetValue(__instance)is int num5)
+                    {
+                        float num6 = AreaFactor(num4) / AreaFactor(num3);
+                        fDynamicBurstCount.SetValue(__instance, Mathf.Max(1, Mathf.RoundToInt((float)num5 * num6)));
+                    }
+
+                    ABLog.Dev("sunbeam coverage rescaled to band " + map.Size.x + "x" + (int)num2 + " (was stack-tall).");
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.WarningOnce("[As above, So below] sunbeam band rescale threw; beams keep whole-stack density. " + ex.Message, 2822362);
+            }
+        }
+
+        private static FieldInfo fDynamicBurstCount;
+
+        private static FieldInfo fCoverageHeight;
+
+        private static FieldInfo fCoverageMode;
+
     }
 }

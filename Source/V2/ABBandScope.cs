@@ -289,6 +289,25 @@ namespace AsAboveSoBelow
             }
             return randomOrder;
         }
+        internal static bool RefusesSpawnAt(Map map, IntVec3 c)
+        {
+            if (!rejectOpenAir || !AppliesTo(map) || !c.InBounds(map))
+            {
+                return false;
+            }
+
+            TerrainDef terrainDef = map.terrainGrid.TerrainAt(c);
+            if (terrainDef != ABDefOf.AB_RoofSurface && terrainDef != ABDefOf.AB_WallTop)
+            {
+                return false;
+            }
+
+            roofRejections++;
+            return true;
+        }
+
+        internal static int roofRejections;
+
     }
 
     /// <summary>
