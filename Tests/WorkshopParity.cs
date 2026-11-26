@@ -417,15 +417,22 @@ public sealed class WorkshopChairRadiusScenario : Rwtf.Scenario
     private static readonly IntVec3 Start = new IntVec3(60, 0, 30);
     private static readonly IntVec3 Exit = new IntVec3(64, 0, 94);
     private static readonly IntVec3 Seat = new IntVec3(67, 0, 94);
+    private static readonly IntVec3 DiagonalStart = Start + IntVec3.North;
+    private static readonly IntVec3 DiagonalSeat = Exit + new IntVec3(2, 0, 1);
     private const int ApproachAndFlight = 11;
     private const int CombinedCost = 14;
+    private const float DiagonalBoundary = 13.359174f;
+    private static readonly double DiagonalCost = Math.Sqrt(17) + 7 + Math.Sqrt(5);
     private Pawn diner;
     private Thing meal;
     private Building chair;
     private Building table;
     private Building_Door exit;
+    private Building diagonalChair;
+    private Building diagonalTable;
     private float originalRadius;
-    private int jobRadius;
+    private float jobRadius;
+    private bool diagonalJob;
     private bool started;
     private bool observedEating;
     private bool ateUpstairs;
@@ -449,6 +456,8 @@ public sealed class WorkshopChairRadiusScenario : Rwtf.Scenario
         originalRadius = meal.def.ingestible.chairSearchRadius;
         chair = SpawnFurniture(c, "DiningChair", Seat, Rot4.East);
         table = SpawnFurniture(c, "Table1x2c", Seat + IntVec3.East, Rot4.North);
+        diagonalChair = SpawnFurniture(c, "DiningChair", DiagonalSeat, Rot4.West);
+        diagonalTable = SpawnFurniture(c, "Table1x2c", DiagonalSeat + IntVec3.West, Rot4.North);
         var pairs = new List<KeyValuePair<Building_Door, Building_Door>>();
         AccessTools.Method(c.OptionalType("AsAboveSoBelow.ABWormhole"), "CollectPairs")
             .Invoke(null, new object[] { c.Map, pairs });
@@ -462,9 +471,27 @@ public sealed class WorkshopChairRadiusScenario : Rwtf.Scenario
             new { start = Start.ToString(), entrance = near.Position.ToString(), exit = exit.Position.ToString(),
                 seat = Seat.ToString(), approach = (near.Position - Start).LengthHorizontal,
                 exitLeg = (Seat - Exit).LengthHorizontal });
-        jobRadius = int.Parse(c.Parameter("ChairJobRadius", CombinedCost.ToString()));
-        if (jobRadius != CombinedCost && jobRadius != CombinedCost - 1)
-            throw new Unsupported("Choose the boundary or one cell below it for the photographed job");
+        float previousFloat = MathF.BitDecrement(DiagonalBoundary);
+        float oldRemaining = DiagonalBoundary - ((near.Position - DiagonalStart).LengthHorizontal + 7f);
+        c.Check("diagonal fixture reproduces the inward-rounded squared radius",
+            (near.Position - DiagonalStart).LengthHorizontalSquared == 17
+            && (diagonalChair.Position - exit.Position).LengthHorizontalSquared == 5
+            && (DiagonalSeat + IntVec3.West).GetEdifice(c.Map) == diagonalTable
+            && c.Map.reachability.CanReach(Exit, diagonalChair, PathEndMode.OnCell, TraverseParms.For(diner))
+            && previousFloat < DiagonalCost && DiagonalCost <= DiagonalBoundary && oldRemaining * oldRemaining < 5f,
+            new { radius = DiagonalBoundary, previousFloat, cost = DiagonalCost,
+                oldRemaining, oldRemainingSquared = oldRemaining * oldRemaining });
+
+        string jobCase = c.Parameter("ChairJobRadius", CombinedCost.ToString());
+        diagonalJob = jobCase == "diagonal-boundary" || jobCase == "diagonal-below";
+        jobRadius = jobCase switch
+        {
+            "14" => CombinedCost,
+            "13" => CombinedCost - 1,
+            "diagonal-boundary" => DiagonalBoundary,
+            "diagonal-below" => previousFloat,
+            _ => throw new Unsupported("Choose 14, 13, diagonal-boundary, or diagonal-below for the native job")
+        };
     }
 
     private static Building SpawnFurniture(Context c, string def, IntVec3 cell, Rot4 rotation)
@@ -485,6 +512,19 @@ public sealed class WorkshopChairRadiusScenario : Rwtf.Scenario
             diner.needs.food.CurLevelPercentage = 0.35f;
             try
             {
+                // Check the diagonal first while the farther straight seat is also available.
+                diner.Position = DiagonalStart;
+                diner.Notify_Teleported();
+                CheckSeat(c, "diagonal chair fits at the first representable budget", DiagonalBoundary, DiagonalSeat, DiagonalCost);
+                CheckSeat(c, "diagonal chair is out of range one float below the budget",
+                    MathF.BitDecrement(DiagonalBoundary), null, DiagonalCost);
+                CheckSeat(c, "the nearer diagonal chair wins when both chairs fit", 15f, DiagonalSeat, DiagonalCost);
+
+                // Keep the original straight-leg controls independent of the diagonal chair.
+                diagonalChair.DeSpawn();
+                diagonalTable.DeSpawn();
+                diner.Position = Start;
+                diner.Notify_Teleported();
                 CheckSeat(c, "in range", CombinedCost + 1, Seat);
                 CheckSeat(c, "exact combined budget", CombinedCost, Seat);
                 CheckSeat(c, "one cell beyond combined budget", CombinedCost - 1, null);
@@ -503,7 +543,16 @@ public sealed class WorkshopChairRadiusScenario : Rwtf.Scenario
             }
 
             meal.def.ingestible.chairSearchRadius = jobRadius;
-            GenSpawn.Spawn(meal, Start, c.Map);
+            if (diagonalJob)
+            {
+                chair.Destroy();
+                table.Destroy();
+                GenSpawn.Spawn(diagonalChair, DiagonalSeat, c.Map, Rot4.West);
+                GenSpawn.Spawn(diagonalTable, DiagonalSeat + IntVec3.West, c.Map, Rot4.North);
+                diner.Position = DiagonalStart;
+                diner.Notify_Teleported();
+            }
+            GenSpawn.Spawn(meal, diner.Position, c.Map);
             var job = JobMaker.MakeJob(JobDefOf.Ingest, meal);
             job.count = 1;
             job.playerForced = true;
@@ -517,11 +566,13 @@ public sealed class WorkshopChairRadiusScenario : Rwtf.Scenario
                 return false;
 
             observedEating = true;
-            ateUpstairs = diner.Position == Seat;
-            bool expected = jobRadius == CombinedCost ? ateUpstairs : diner.Position.z < 64;
+            ateUpstairs = diner.Position == (diagonalJob ? DiagonalSeat : Seat);
+            double jobCost = diagonalJob ? DiagonalCost : CombinedCost;
+            bool expected = jobRadius >= jobCost ? ateUpstairs : diner.Position.z < 64;
             c.Check("native ingestion destination obeys the combined chair budget", expected,
-                new { radius = jobRadius, cost = CombinedCost, pos = diner.Position.ToString(),
-                    table = table.Position.ToString(), carrying = diner.carryTracker.CarriedThing.Label });
+                new { radius = jobRadius, cost = jobCost, pos = diner.Position.ToString(),
+                    table = (diagonalJob ? diagonalTable : table).Position.ToString(),
+                    carrying = diner.carryTracker.CarriedThing.Label });
             if (!string.IsNullOrEmpty(c.Parameter("CaptureChairJob")))
             {
                 AccessTools.Method(c.OptionalType("AsAboveSoBelow.ABBandView"), "SetBand")
@@ -529,7 +580,7 @@ public sealed class WorkshopChairRadiusScenario : Rwtf.Scenario
                 Find.CameraDriver.SetRootPosAndSize(diner.Position.ToVector3Shifted(), 12f);
                 Find.Selector.Select(diner);
                 string outcome = ateUpstairs ? "Diner reached the upstairs table" : "Diner stayed downstairs";
-                Messages.Message($"Chair radius {jobRadius}, upstairs chair costs {CombinedCost}. {outcome}.",
+                Messages.Message(FormattableString.Invariant($"Chair radius {jobRadius:R}, upstairs chair costs {jobCost:F9}. {outcome}."),
                     MessageTypeDefOf.NeutralEvent, false);
                 capturePath = Path.Combine(c.Output, "chair-ingestion.png");
             }
@@ -541,7 +592,7 @@ public sealed class WorkshopChairRadiusScenario : Rwtf.Scenario
             {
                 UnityEngine.ScreenCapture.CaptureScreenshot(capturePath);
                 c.Event("chair-capture-request", new { file = Path.GetFileName(capturePath), tick = c.Tick,
-                    pawn = diner.Position.ToString(), radius = jobRadius, expectedCost = CombinedCost });
+                    pawn = diner.Position.ToString(), radius = jobRadius, expectedCost = diagonalJob ? DiagonalCost : CombinedCost });
             }
             if (captureFrames < 4 || !File.Exists(capturePath))
                 return false;
@@ -576,13 +627,13 @@ public sealed class WorkshopChairRadiusScenario : Rwtf.Scenario
         }
     }
 
-    private void CheckSeat(Context c, string name, float radius, IntVec3? expected)
+    private void CheckSeat(Context c, string name, float radius, IntVec3? expected, double cost = CombinedCost)
     {
         meal.def.ingestible.chairSearchRadius = radius;
         bool found = Toils_Ingest.TryFindChairOrSpot(diner, meal, out var cell);
         c.Check(name, found && (expected.HasValue ? cell == expected.Value : cell.z < 64
             && cell.GetEdifice(c.Map)?.def.building.isSittable != true), new { radius,
-                approachAndFlight = ApproachAndFlight, combined = CombinedCost, cell = cell.ToString(), found });
+                cost, cell = cell.ToString(), found });
     }
 
     public override void Assert(Context c)

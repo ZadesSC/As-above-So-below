@@ -9,7 +9,7 @@ namespace AsAboveSoBelow;
 [HarmonyPatch(typeof(Toils_Ingest), "TryFindChairOrSpot")]
 public static class Patch_ToilsIngest_ABCrossLevelChair
 {
-    private const float FlightCost = 7f;
+    private const double FlightCost = 7;
     private static readonly List<KeyValuePair<Building_Door, Building_Door>> tmpPairs = new List<KeyValuePair<Building_Door, Building_Door>>();
     private static void Postfix(Pawn pawn, Thing ingestible, ref IntVec3 cell, ref bool __result)
     {
@@ -34,7 +34,7 @@ public static class Patch_ToilsIngest_ABCrossLevelChair
                     num = building_NutrientPasteDispenser.DispensableDef.ingestible.chairSearchRadius;
                 }
 
-                if (!(num <= 0f) && TryFindCrossLevelChair(pawn, map, num, out var seat))
+                if (num > 0f && TryFindCrossLevelChair(pawn, map, num, out var seat))
                 {
                     cell = seat;
                     __result = true;
@@ -47,9 +47,9 @@ public static class Patch_ToilsIngest_ABCrossLevelChair
         }
     }
 
-    private static bool IsSittable(Building b)
+    private static bool IsSittable(Thing thing)
     {
-        return b != null && b.def.building != null && b.def.building.isSittable;
+        return thing?.def.building?.isSittable == true;
     }
 
     private static bool TryFindCrossLevelChair(Pawn pawn, Map map, float radius, out IntVec3 seat)
@@ -58,7 +58,7 @@ public static class Patch_ToilsIngest_ABCrossLevelChair
         tmpPairs.Clear();
         ABWormhole.CollectPairs(map, tmpPairs);
         IntVec3 position = pawn.Position;
-        float best = float.MaxValue;
+        double best = double.PositiveInfinity;
         Thing bestChair = null;
         for (int i = 0; i < tmpPairs.Count; i++)
         {
@@ -77,7 +77,7 @@ public static class Patch_ToilsIngest_ABCrossLevelChair
         return Toils_Ingest.TryFindFreeSittingSpotOnThing(bestChair, pawn, out seat);
     }
 
-    private static bool Consider(Pawn pawn, Map map, IntVec3 from, Building_Door near, Building_Door far, float radius, ref float best, ref Thing bestChair)
+    private static bool Consider(Pawn pawn, Map map, IntVec3 from, Building_Door near, Building_Door far, double radius, ref double best, ref Thing bestChair)
     {
         if (near == null || far == null || !near.Spawned || !far.Spawned || !ABBands.SameBand(map, near.Position, from))
         {
@@ -89,9 +89,8 @@ public static class Patch_ToilsIngest_ABCrossLevelChair
             return true;
         }
 
-        float costToExit = (near.Position - from).LengthHorizontal + FlightCost;
-        float remaining = radius - costToExit;
-        if (remaining < 0f || costToExit >= best)
+        double costToExit = Math.Sqrt((near.Position - from).LengthHorizontalSquared) + FlightCost;
+        if (costToExit > radius || costToExit >= best)
         {
             return true;
         }
@@ -104,24 +103,23 @@ public static class Patch_ToilsIngest_ABCrossLevelChair
         IntVec3 farRoot = far.Position;
         var request = ThingRequest.ForGroup(ThingRequestGroup.BuildingArtificial);
         var traverse = TraverseParms.For(pawn);
-        bool ValidChair(Thing chair) => ABBands.SameBand(map, chair.Position, farRoot)
-            && ChairValidator(pawn, chair) && chair.Position.GetDangerFor(pawn, map) == Danger.None;
-
-        Thing thing = GenClosest.ClosestThingReachable(farRoot, map, request, PathEndMode.OnCell,
-            traverse, remaining, ValidChair);
-        // Region search excludes the radius itself, including the root when the radius is zero.
-        thing ??= GenClosest.ClosestThing_Global(farRoot, map.listerThings.ThingsMatching(request),
-            remaining, chair => ValidChair(chair) && map.reachability.CanReach(farRoot, chair, PathEndMode.OnCell, traverse));
-        if (thing == null)
+        // Score the full route before testing reachability. A native float radius derived
+        // from the remaining budget can round inward or exclude equality and zero.
+        foreach (Thing chair in map.listerThings.ThingsMatching(request))
         {
-            return true;
-        }
+            if (!IsSittable(chair))
+            {
+                continue;
+            }
 
-        float total = costToExit + (thing.Position - farRoot).LengthHorizontal;
-        if (total <= radius && total < best)
-        {
-            best = total;
-            bestChair = thing;
+            double total = costToExit + Math.Sqrt((chair.Position - farRoot).LengthHorizontalSquared);
+            if (total <= radius && total < best && ABBands.SameBand(map, chair.Position, farRoot)
+                && ChairValidator(pawn, chair) && chair.Position.GetDangerFor(pawn, map) == Danger.None
+                && map.reachability.CanReach(farRoot, chair, PathEndMode.OnCell, traverse))
+            {
+                best = total;
+                bestChair = chair;
+            }
         }
 
         return true;
@@ -129,11 +127,6 @@ public static class Patch_ToilsIngest_ABCrossLevelChair
 
     private static bool ChairValidator(Pawn pawn, Thing t)
     {
-        if (t.def.building == null || !t.def.building.isSittable)
-        {
-            return false;
-        }
-
         if (t.Faction != pawn.Faction && pawn.Faction != null && pawn.Faction.IsPlayer)
         {
             return false;
