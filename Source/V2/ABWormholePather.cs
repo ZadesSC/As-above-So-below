@@ -1209,6 +1209,7 @@ namespace AsAboveSoBelow
         /// straight from Carry (no clip) or from TickCrossings when the hold expires.</summary>
         private static void CarryNow(Pawn pawn, Transit t)
         {
+#if RIMWORLD_17
             if (t.nativePortal && !ABNativePortals.CanCross(pawn, t.near, t.far))
             {
                 ABStairAnim.Clear(pawn);
@@ -1216,6 +1217,7 @@ namespace AsAboveSoBelow
                 ABNativePortals.Replan(pawn, t.realDest, t.realPeMode);
                 return;
             }
+#endif
             IntVec3 landing = LandingCell(pawn, t.far);
             if (!landing.IsValid)
             {
@@ -1747,16 +1749,16 @@ namespace AsAboveSoBelow
         {
             try
             {
-                if (ABNativePortals.ShouldRoute(___pawn?.Map, ___pawn, ___pawn?.Position ?? IntVec3.Invalid, dest))
+#if RIMWORLD_17
+                if (ABNativePortals.UsesNativeRouting(___pawn?.Map))
                 {
                     ABWormholePather.Clear(___pawn);
+                    return;
                 }
-                else
-                {
-                    ABWormholePather.lastOutcome = ABWormholePather.SegmentOutcome.NotOurs;
-                    ABWormholePather.TrySegment(___pawn, ref dest, ref peMode);
-                    ABWormholePather.NoteIfDoomed(___pawn, dest);
-                }
+#endif
+                ABWormholePather.lastOutcome = ABWormholePather.SegmentOutcome.NotOurs;
+                ABWormholePather.TrySegment(___pawn, ref dest, ref peMode);
+                ABWormholePather.NoteIfDoomed(___pawn, dest);
             }
             catch (Exception ex)
             {

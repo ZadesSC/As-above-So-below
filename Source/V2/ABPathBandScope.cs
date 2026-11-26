@@ -195,10 +195,6 @@ namespace AsAboveSoBelow
         ///    build a rejection on. A destination on a band edge reached with
         ///    PathEndMode.Touch is the realistic case.
         /// </summary>
-        internal static bool CrossBand(Map map, IntVec3 start, LocalTargetInfo target, out string why)
-        {
-            return CrossBand(map, start, target, PathEndMode.OnCell, null, out why);
-        }
 
         // ---- per band door / pawn / provider buckets -------------------------
         //
@@ -332,11 +328,12 @@ namespace AsAboveSoBelow
                 return;
             }
             Map map = request.map;
-            if (map == null || !ABBands.Banded(map)
-                || ABNativePortals.UsesNativeRouting(map))
-            {
+            if (map == null || !ABBands.Banded(map))
                 return;
-            }
+#if RIMWORLD_17
+            if (ABNativePortals.UsesNativeRouting(map))
+                return;
+#endif
             int bands = Mathf.Max(1, ABBands.BandCount(map));
             if (bands < 2)
             {
@@ -511,14 +508,16 @@ namespace AsAboveSoBelow
                 typeof(PathRequest.IPathGridCustomizer)
             });
         }
-        private static bool Prefix(Map ___map, IntVec3 start, LocalTargetInfo target, PathEndMode peMode, TraverseParms traverseParms, ref PawnPath __result)
+        private static bool Prefix(Map ___map, IntVec3 start, LocalTargetInfo target,
+            PathEndMode peMode, ref PawnPath __result)
         {
             ABPerfStats.NoteRequest(___map, sync: true);
-            if (ABNativePortals.ShouldRoute(___map, traverseParms.pawn, start, target)
-                || !ABPathBandScope.CrossBand(___map, start, target, peMode, null, out var why))
-            {
+#if RIMWORLD_17
+            if (ABNativePortals.UsesNativeRouting(___map))
                 return true;
-            }
+#endif
+            if (!ABPathBandScope.CrossBand(___map, start, target, peMode, null, out string why))
+                return true;
 
             ABPathBandScope.rejectedSync++;
             ABPathBandScope.lastReject = "sync " + why;
@@ -551,8 +550,10 @@ namespace AsAboveSoBelow
             }
 
             ABPerfStats.NoteRequest(request.map, sync: false);
-            if (ABNativePortals.ShouldRoute(request.map, request.TraverseParms.pawn, request.Start, request.Target))
+#if RIMWORLD_17
+            if (ABNativePortals.UsesNativeRouting(request.map))
                 return true;
+#endif
             if (ABWormholePather.ConsumeDoomedRequest(request.pawn))
             {
                 ABPathBandScope.rejectedAsync++;

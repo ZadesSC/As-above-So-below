@@ -19,7 +19,7 @@ internal static class ABNativePortalKernel
         internal ABNativePortals.SearchContext Context;
         internal int Slot, MinX, MaxX, MinZ, MaxZ, Cardinal, Diagonal;
         internal float Strength;
-        internal bool SinglePair;
+        internal bool Projected, SinglePair;
         internal int GoalFloor, EntryFloor, EntryX, EntryZ, EntryTail;
     }
     public static Frame Begin(ref PathFinderJob job)
@@ -29,47 +29,79 @@ internal static class ABNativePortalKernel
             return default;
 
         var frame = new Frame { Context = context, Slot = context.Slot };
-        if (job.destRect.minZ / context.Slot == job.destRect.maxZ / context.Slot)
-        {
-            frame.MinX = job.destRect.minX;
-            frame.MaxX = job.destRect.maxX;
-            frame.MinZ = job.destRect.minZ % context.Slot;
-            frame.MaxZ = job.destRect.maxZ % context.Slot;
-            frame.Cardinal = job.moveTicksCardinal;
-            frame.Diagonal = job.moveTicksDiagonal;
-            frame.Strength = job.heuristicStrength;
-            frame.GoalFloor = job.destRect.minZ / context.Slot;
+        if (frame.Slot <= 0 || job.destRect.minZ / frame.Slot != job.destRect.maxZ / frame.Slot
+            || !ValidMoveCosts(job.moveTicksCardinal, job.moveTicksDiagonal)
+            || !TryValidateSeams(ref job, frame.Slot, out int floors))
+            return frame;
+
+        frame.MinX = job.destRect.minX;
+        frame.MaxX = job.destRect.maxX;
+        frame.MinZ = job.destRect.minZ % frame.Slot;
+        frame.MaxZ = job.destRect.maxZ % frame.Slot;
+        frame.Cardinal = job.moveTicksCardinal;
+        frame.Diagonal = job.moveTicksDiagonal;
+        frame.Strength = Mathf.Clamp01(job.heuristicStrength);
+        frame.GoalFloor = job.destRect.minZ / frame.Slot;
+        frame.Projected = context.CanProject;
+        if (floors == 2)
             PrepareSinglePair(ref job, ref frame);
-        }
         return frame;
     }
-    static void PrepareSinglePair(ref PathFinderJob job, ref Frame frame)
+
+    internal static bool ValidMoveCosts(int cardinal, int diagonal) =>
+        cardinal > 0 && diagonal >= cardinal && diagonal <= 2L * cardinal;
+
+    private static bool TryValidateSeams(ref PathFinderJob job, int slot, out int floors)
+    {
+        floors = 0;
+        int width = job.indices.CellToIndex(new IntVec3(0, 0, 1));
+        if (width <= 0 || job.calcGrid.Length % (width * slot) != 0)
+            return false;
+
+        floors = job.calcGrid.Length / (width * slot);
+        // Modulo projection wraps at a seam. Every ordinary move must stay on
+        // one side of that wrap or the projected distance can overestimate.
+        for (int floor = 1; floor < floors; floor++)
+        {
+            int row = (floor * slot - 1) * width;
+            for (int x = 0; x < width; x++)
+                if (Cost(ref job, row + x) < 10000)
+                    return false;
+        }
+        return true;
+    }
+
+    private static void PrepareSinglePair(ref PathFinderJob job, ref Frame frame)
     {
         var edges = frame.Context.Edges;
-        if (edges.Count != 2 || frame.Cardinal <= 0 || frame.Diagonal < frame.Cardinal || frame.Diagonal > frame.Cardinal * 2) return;
+        if (edges.Count != 2)
+            return;
+
         var iterator = edges.GetEnumerator();
         iterator.MoveNext();
         var a = iterator.Current;
         iterator.MoveNext();
         var b = iterator.Current;
-        if (a.Value.Length != 1 || b.Value.Length != 1 || a.Value[0].Exit != b.Key || b.Value[0].Exit != a.Key || a.Value[0].Cost < 0 || b.Value[0].Cost < 0) return;
-        var ac = job.indices.IndexToCell(a.Key); var bc = job.indices.IndexToCell(b.Key);
-        int af = ac.z / frame.Slot, bf = bc.z / frame.Slot;
-        if (!((af == 0 && bf == 1) || (af == 1 && bf == 0)) || (frame.GoalFloor != af && frame.GoalFloor != bf)) return;
-        int width = job.indices.CellToIndex(new IntVec3(0, 0, 1));
-        if (width <= 0 || job.calcGrid.Length != width * frame.Slot * 2) return;
-        // The bound assumes this portal is required to cross floors. Verify an
-        // entire native cost-grid row is impassable; a physical seam passage
-        // must retain the general conservative heuristic instead.
-        int row = (frame.Slot - 1) * width;
-        for (int x = 0; x < width; x++)
-            if (Cost(ref job, row + x) < 10000)
-                return;
+        if (a.Value.Length != 1 || b.Value.Length != 1 || a.Value[0].Exit != b.Key
+            || b.Value[0].Exit != a.Key || a.Value[0].Cost < 0 || b.Value[0].Cost < 0)
+            return;
+
+        var ac = job.indices.IndexToCell(a.Key);
+        var bc = job.indices.IndexToCell(b.Key);
+        int af = ac.z / frame.Slot;
+        int bf = bc.z / frame.Slot;
+        if (!((af == 0 && bf == 1) || (af == 1 && bf == 0))
+            || (frame.GoalFloor != af && frame.GoalFloor != bf))
+            return;
+
         bool goalA = frame.GoalFloor == af;
-        var entry = goalA ? bc : ac; var exit = goalA ? ac : bc;
+        var entry = goalA ? bc : ac;
+        var exit = goalA ? ac : bc;
         int crossing = goalA ? b.Value[0].Cost : a.Value[0].Cost;
         int localExit = exit.z % frame.Slot;
-        frame.EntryFloor = entry.z / frame.Slot; frame.EntryX = entry.x; frame.EntryZ = entry.z % frame.Slot;
+        frame.EntryFloor = entry.z / frame.Slot;
+        frame.EntryX = entry.x;
+        frame.EntryZ = entry.z % frame.Slot;
         frame.EntryTail = crossing + Octile(exit.x - Mathf.Clamp(exit.x, frame.MinX, frame.MaxX), localExit - Mathf.Clamp(localExit, frame.MinZ, frame.MaxZ), frame.Cardinal, frame.Diagonal);
         frame.SinglePair = true;
     }
@@ -92,7 +124,7 @@ internal static class ABNativePortalKernel
         int localZ = cell.z % frame.Slot;
         if (frame.SinglePair && cell.z / frame.Slot == frame.EntryFloor)
             return (Octile(cell.x - frame.EntryX, localZ - frame.EntryZ, frame.Cardinal, frame.Diagonal) + frame.EntryTail) * frame.Strength;
-        if (!frame.SinglePair || cell.z / frame.Slot != frame.GoalFloor)
+        if (!frame.Projected && !(frame.SinglePair && cell.z / frame.Slot == frame.GoalFloor))
             return 0;
         int x = Mathf.Clamp(cell.x, frame.MinX, frame.MaxX);
         int z = Mathf.Clamp(localZ, frame.MinZ, frame.MaxZ);
@@ -171,7 +203,7 @@ internal static class ABNativePortalKernel
         if (starts.Length != 1 || locals.Count <= 26 || locals[26].LocalType != typeof(PathFinderJob.CalcNode)) throw new InvalidOperationException("Unsupported native heuristic block");
         int heuristicStart = starts[0];
         var nativeHeuristic = generator.DefineLabel(); var storeHeuristic = generator.DefineLabel();
-        code[heuristicStart].labels.Add(nativeHeuristic); code[heuristic].labels.Add(storeHeuristic);
+        code[heuristic].labels.Add(storeHeuristic);
         var projected = generator.DeclareLocal(typeof(float));
         var frame = generator.DeclareLocal(typeof(Frame));
         var result = new List<CodeInstruction>
@@ -193,7 +225,11 @@ internal static class ABNativePortalKernel
             }
             if (i == heuristicStart)
             {
-                result.Add(new CodeInstruction(OpCodes.Ldloc_S, (byte)12));
+                var first = new CodeInstruction(OpCodes.Ldloc_S, (byte)12);
+                first.labels.AddRange(code[i].labels);
+                code[i].labels.Clear();
+                code[i].labels.Add(nativeHeuristic);
+                result.Add(first);
                 result.Add(new CodeInstruction(OpCodes.Ldloca, frame)); result.Add(new CodeInstruction(OpCodes.Ldloca, projected));
                 result.Add(CodeInstruction.Call(typeof(ABNativePortalKernel), nameof(TryProjected))); result.Add(new CodeInstruction(OpCodes.Brfalse, nativeHeuristic));
                 result.Add(new CodeInstruction(OpCodes.Ldarg_0)); result.Add(new CodeInstruction(OpCodes.Ldflda, grid)); result.Add(new CodeInstruction(OpCodes.Ldloc_S, (byte)13));

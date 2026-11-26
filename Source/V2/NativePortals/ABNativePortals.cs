@@ -3,12 +3,10 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
-using System.Reflection.Emit;
 using System.Runtime.CompilerServices;
 using HarmonyLib;
 using RimWorld;
 using Unity.Collections.LowLevel.Unsafe;
-using Unity.Jobs;
 using Verse;
 using Verse.AI;
 
@@ -18,7 +16,7 @@ namespace AsAboveSoBelow;
 internal static class ABNativePortals
 {
     private const string HarmonyId = "astryl.asabovesobelow.nativeportals";
-    private static readonly ConditionalWeakTable<Map, List<Link>> graphs = new();
+    private static readonly ConditionalWeakTable<Map, Geometry> graphs = new();
     private static readonly ConcurrentDictionary<IntPtr, SearchContext> pending = new();
     private static bool active;
 
@@ -49,9 +47,16 @@ internal static class ABNativePortals
         }
     }
 
+    private sealed class Geometry
+    {
+        public readonly List<Link> Links = new();
+        public bool HasSpecialConnector;
+    }
+
     internal sealed class SearchContext
     {
         public int Slot;
+        public bool CanProject;
         public Dictionary<int, Edge[]> Edges;
     }
 
@@ -65,13 +70,6 @@ internal static class ABNativePortals
                 transpiler: new HarmonyMethod(typeof(ABNativePortalKernel), nameof(ABNativePortalKernel.Rewrite)));
             harmony.Patch(Require(typeof(PathFinder), "ParameterizePathJob"),
                 postfix: Hook(nameof(Prepare)));
-            harmony.Patch(Require(typeof(PathFinder), "ScheduleBatchedPathJobs"),
-                transpiler: Hook(nameof(RewriteDispatch)));
-            harmony.Patch(Require(typeof(PathFinder), nameof(PathFinder.FindPathNow), new[]
-            {
-                typeof(IntVec3), typeof(LocalTargetInfo), typeof(TraverseParms), typeof(PathFinderCostTuning?),
-                typeof(PathEndMode), typeof(PathRequest.IPathGridCustomizer)
-            }), transpiler: Hook(nameof(RewriteDispatch)));
             harmony.Patch(Require(typeof(Pawn_PathFollower), "SetupMoveIntoNextCell"),
                 prefix: Hook(nameof(BeforeMove)));
             active = true;
@@ -95,43 +93,35 @@ internal static class ABNativePortals
             graphs.Remove(map);
     }
 
-    private static List<Link> GraphFor(Map map) => graphs.GetValue(map, BuildGraph);
+    private static Geometry GraphFor(Map map) => graphs.GetValue(map, BuildGraph);
 
-    private static List<Link> BuildGraph(Map map)
+    private static Geometry BuildGraph(Map map)
     {
-        var links = new List<Link>();
+        var geometry = new Geometry();
         foreach (var pair in ABWormhole.PortalPairs(map))
         {
-            // Keep the existing routing for maps with connector types whose
-            // movement, approach rules or animation are outside this port.
             if (!ABStairAnim.TryPortalDelay(pair.Key, out int firstDelay)
                 || !ABStairAnim.TryPortalDelay(pair.Value, out int secondDelay)
                 || !ABLinkApproach.TryGet(pair.Key, out ABApproach first)
-                || !ABLinkApproach.TryGet(pair.Value, out ABApproach second))
-                return new List<Link>();
+                || !ABLinkApproach.TryGet(pair.Value, out ABApproach second)
+                || !first.mouth.InBounds(map) || !second.mouth.InBounds(map)
+                || ABBands.InGutter(map, first.mouth) || ABBands.InGutter(map, second.mouth)
+                || ABBands.SameBand(map, first.mouth, second.mouth))
+            {
+                geometry.HasSpecialConnector = true;
+                continue;
+            }
 
-            links.Add(new Link(pair.Key, pair.Value, first.mouth, second.mouth, firstDelay));
-            links.Add(new Link(pair.Value, pair.Key, second.mouth, first.mouth, secondDelay));
+            geometry.Links.Add(new Link(pair.Key, pair.Value, first.mouth, second.mouth, firstDelay));
+            geometry.Links.Add(new Link(pair.Value, pair.Key, second.mouth, first.mouth, secondDelay));
         }
-        return links;
+        return geometry;
     }
 
+    // Keep the segmented planner on maps with connectors whose choreography
+    // still requires it. Ordinary maps use the whole native grid even with no links.
     internal static bool UsesNativeRouting(Map map) =>
-        active && ABBands.CompOf(map)?.Banded == true && GraphFor(map).Count > 0;
-
-    internal static bool ShouldRoute(Map map, Pawn pawn, IntVec3 start, LocalTargetInfo target)
-    {
-        if (pawn == null || !UsesNativeRouting(map) || !start.InBounds(map)
-            || !target.IsValid || !target.Cell.InBounds(map) || ABBands.InGutter(map, start)
-            || ABBands.InGutter(map, target.Cell))
-            return false;
-
-        if (!ABBands.SameBand(map, start, target.Cell))
-            return true;
-
-        int from = ABBandComponents.ComponentOf(map, start, pawn);
-        return from < 0 || from != ABBandComponents.ComponentOf(map, target.Cell, pawn);
-    }
+        active && map != null && ABBands.Banded(map) && !GraphFor(map).HasSpecialConnector;
 
     internal static bool CanCross(Pawn pawn, Building_Door near, Building_Door far) =>
         pawn.Spawned && near.Spawned && far.Spawned && near.Map == pawn.Map && far.Map == pawn.Map
@@ -150,15 +140,17 @@ internal static class ABNativePortals
 
     private static void Prepare(ref PathFinderJob job, PathRequest request)
     {
-        if (!ShouldRoute(request.map, request.TraverseParms.pawn, request.Start, request.Target))
+        if (!UsesNativeRouting(request.map))
             return;
 
         Pawn pawn = request.TraverseParms.pawn;
         bool animated = ABMod.Settings?.transitAnim == true;
         var links = new Dictionary<int, List<Edge>>();
-        foreach (Link link in GraphFor(request.map))
+        int slot = ABBands.CompOf(request.map).Slot;
+        bool canProject = slot > 0 && ABNativePortalKernel.ValidMoveCosts(job.moveTicksCardinal, job.moveTicksDiagonal);
+        foreach (Link link in GraphFor(request.map).Links)
         {
-            if (!CanCross(pawn, link.Near, link.Far))
+            if (pawn != null && !CanCross(pawn, link.Near, link.Far))
                 continue;
             int from = job.indices.CellToIndex(link.Entry);
             int to = job.indices.CellToIndex(link.Exit);
@@ -167,7 +159,11 @@ internal static class ABNativePortals
                 edges = new List<Edge>();
                 links.Add(from, edges);
             }
-            edges.Add(new Edge(to, animated ? link.Delay : 0));
+            int delay = animated ? link.Delay : 0;
+            edges.Add(new Edge(to, delay));
+            if (canProject && ABNativePortalKernel.Octile(link.Entry.x - link.Exit.x,
+                link.Entry.z % slot - link.Exit.z % slot, job.moveTicksCardinal, job.moveTicksDiagonal) > delay)
+                canProject = false;
         }
 
         if (links.Count == 0)
@@ -175,7 +171,8 @@ internal static class ABNativePortals
 
         pending[PathKey(ref job)] = new SearchContext
         {
-            Slot = ABBands.CompOf(request.map).Slot,
+            Slot = slot,
+            CanProject = canProject,
             Edges = links.ToDictionary(entry => entry.Key, entry => entry.Value.ToArray())
         };
     }
@@ -186,75 +183,18 @@ internal static class ABNativePortals
     internal static void TakeContext(ref PathFinderJob job, out SearchContext context) =>
         pending.TryRemove(PathKey(ref job), out context);
 
-    // Unity 1.6 can dispatch PathFinderJob through Burst and bypass managed IL.
-    // Only prepared searches dispatch this non-Burst wrapper.
-    private struct PortalJob : IJob
-    {
-        public PathFinderJob Job;
-        public void Execute() => Job.Execute();
-    }
-
-    private static JobHandle Schedule(PathFinderJob job, JobHandle dependency)
-    {
-        IntPtr key = PathKey(ref job);
-        if (!pending.ContainsKey(key))
-            return job.Schedule(dependency);
-        try
-        {
-            return new PortalJob { Job = job }.Schedule(dependency);
-        }
-        catch
-        {
-            pending.TryRemove(key, out _);
-            throw;
-        }
-    }
-
-    private static void Run(PathFinderJob job)
-    {
-        IntPtr key = PathKey(ref job);
-        if (!pending.ContainsKey(key))
-        {
-            job.Run();
-            return;
-        }
-        try
-        {
-            new PortalJob { Job = job }.Run();
-        }
-        finally
-        {
-            pending.TryRemove(key, out _);
-        }
-    }
-
-    private static IEnumerable<CodeInstruction> RewriteDispatch(IEnumerable<CodeInstruction> instructions,
-        MethodBase original)
-    {
-        string expected = original.Name == nameof(PathFinder.FindPathNow) ? nameof(Run) : nameof(Schedule);
-        var code = instructions.ToList();
-        var calls = code.Where(instruction => instruction.opcode == OpCodes.Call
-            && instruction.operand is MethodInfo method && method.DeclaringType == typeof(IJobExtensions)
-            && method.Name == expected && method.IsGenericMethod
-            && method.GetGenericArguments().SequenceEqual(new[] { typeof(PathFinderJob) })).ToList();
-        if (calls.Count != 1)
-            throw new InvalidOperationException("Unexpected native path dispatch in " + original.Name);
-        calls[0].operand = Require(typeof(ABNativePortals), expected);
-        return code;
-    }
-
     private static bool BeforeMove(Pawn_PathFollower __instance, Pawn ___pawn, PawnPath ___curPath,
         IntVec3 ___nextCell, PathEndMode ___peMode)
     {
-        if (!active || ___pawn?.Map == null || ___curPath == null || ___curPath.NodesLeftCount < 2)
+        if (___curPath == null || ___curPath.NodesLeftCount < 2 || !UsesNativeRouting(___pawn?.Map))
             return true;
 
         IntVec3 next = ___curPath.Peek(0);
         if (next == ___nextCell)
             next = ___curPath.Peek(1);
         IntVec3 at = ___pawn.Position;
-        if ((Math.Abs(next.x - at.x) <= 1 && Math.Abs(next.z - at.z) <= 1)
-            || !ABBands.Banded(___pawn.Map) || ABBands.SameBand(___pawn.Map, at, next))
+        if (Math.Abs(next.x - at.x) <= 1 && Math.Abs(next.z - at.z) <= 1
+            || ABBands.SameBand(___pawn.Map, at, next))
             return true;
 
         // StartPath can leave the previous path moving while its replacement is queued.
@@ -266,7 +206,7 @@ internal static class ABNativePortals
         }
 
         LocalTargetInfo destination = __instance.Destination;
-        foreach (Link link in GraphFor(___pawn.Map))
+        foreach (Link link in GraphFor(___pawn.Map).Links)
         {
             if (link.Entry == at && link.Exit == next
                 && CanCross(___pawn, link.Near, link.Far))

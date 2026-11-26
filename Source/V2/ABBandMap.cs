@@ -569,6 +569,9 @@ namespace AsAboveSoBelow
             this.bandCount = bandCount;
             this.bandHeight = bandHeight;
             this.surfaceBand = surfaceBand;
+#if RIMWORLD_17
+            ABNativePortals.Invalidate(map);
+#endif
         }
 
         /// <summary>Drop the per-band biome memo so an abandoned map is not pinned alive by

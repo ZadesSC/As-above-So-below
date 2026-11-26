@@ -22,6 +22,9 @@
     <DebugType>none</DebugType>
     <DebugSymbols>false</DebugSymbols>
   </PropertyGroup>
+  <ItemGroup Condition="'$(RimWorldVersion)' != '1.7'">
+    <Compile Remove="V2/NativePortals/**/*.cs" />
+  </ItemGroup>
   <ItemGroup>
     <PackageReference Condition="'$(RimWorldVersion)' == '1.6'" Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
     <PackageReference Condition="'$(RimWorldVersion)' == '1.6'" Include="Lib.Harmony" Version="2.4.1" ExcludeAssets="runtime">
