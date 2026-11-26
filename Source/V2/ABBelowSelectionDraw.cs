@@ -40,6 +40,7 @@ namespace AsAboveSoBelow
     /// The method is generic; the closed form actually used is resolved explicitly, since
     /// Harmony cannot infer which instantiation to patch.
     /// </summary>
+#if !RIMWORLD_17
     [HarmonyPatch]
     public static class Patch_SelectionBrackets_ABBelow
     {
@@ -64,6 +65,8 @@ namespace AsAboveSoBelow
             }
         }
     }
+
+#endif
 
     // ⚠⚠ THE PATH LINE PATCH THAT LIVED HERE HAS BEEN DELETED. ONE OWNER ONLY.
     //

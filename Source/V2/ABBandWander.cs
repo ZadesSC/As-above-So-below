@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System;
 using HarmonyLib;
 using RimWorld;
@@ -45,21 +46,68 @@ namespace AsAboveSoBelow
                 {
                     return;
                 }
+
                 Map map = pawn.Map;
-                if (map == null || !ABBands.Banded(map))
+                if (map != null && ABBands.Banded(map))
                 {
-                    return;
+                    if (pawn.RaceProps != null && pawn.RaceProps.Animal && pawn.Faction == Faction.OfPlayer && !BandHasColonyPresence(map, pawn) && TryColonistRoot(map, pawn, out var root))
+                    {
+                        __result = root;
+                    }
+                    else if (!ABBands.SameBand(map, pawn.Position, __result))
+                    {
+                        __result = pawn.Position;
+                    }
                 }
-                if (ABBands.SameBand(map, pawn.Position, __result))
-                {
-                    return;
-                }
-                __result = pawn.Position;
             }
             catch (Exception e)
             {
                 ABGuard.Disable(ABGuard.Movement, e, "V2 wander root band clamp");
             }
         }
+        private static bool TryColonistRoot(Map map, Pawn pawn, out IntVec3 root)
+        {
+            root = IntVec3.Invalid;
+            Pawn pawn2 = pawn.playerSettings?.Master;
+            if (pawn2 != null && pawn2.Spawned && pawn2.Map == map && !pawn2.Downed && !pawn2.Position.IsForbidden(pawn) && pawn.CanReach(pawn2.Position, PathEndMode.Touch, Danger.None))
+            {
+                root = pawn2.Position;
+                return true;
+            }
+
+            List<Pawn> freeColonistsSpawned = map.mapPawns.FreeColonistsSpawned;
+            int num = 0;
+            for (int i = 0; i < freeColonistsSpawned.Count; i++)
+            {
+                Pawn pawn3 = freeColonistsSpawned[i];
+                if (pawn3 != null && pawn3 != pawn && pawn3.Spawned && !pawn3.Downed && !pawn3.Position.IsForbidden(pawn) && pawn.CanReach(pawn3.Position, PathEndMode.Touch, Danger.None))
+                {
+                    num++;
+                    if (Rand.Range(0, num) == 0)
+                    {
+                        root = pawn3.Position;
+                    }
+                }
+            }
+
+            return root.IsValid;
+        }
+
+        private static bool BandHasColonyPresence(Map map, Pawn pawn)
+        {
+            IntVec3 position = pawn.Position;
+            List<Pawn> freeColonistsSpawned = map.mapPawns.FreeColonistsSpawned;
+            for (int i = 0; i < freeColonistsSpawned.Count; i++)
+            {
+                Pawn pawn2 = freeColonistsSpawned[i];
+                if (pawn2 != null && pawn2 != pawn && pawn2.Spawned && !pawn2.Downed && ABBands.SameBand(map, pawn2.Position, position))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
     }
 }

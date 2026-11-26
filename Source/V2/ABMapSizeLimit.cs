@@ -1,3 +1,4 @@
+using RimWorld.Planet;
 using System;
 using System.Collections.Generic;
 using System.Reflection;
@@ -401,25 +402,7 @@ namespace AsAboveSoBelow
         /// bypass the chooser.</summary>
         public static int Clamp(int size)
         {
-            if (!Active)
-            {
-                return size;
-            }
-            // Snap to the largest OFFERED size that fits the budget. A plain Min() would
-            // happily return something like 175 - inside the budget but sitting badly on
-            // the 64-row slot boundary, paying a full extra band of gutter for nothing.
-            int best = -1;
-            for (int i = 0; i < Sizes.Length; i++)
-            {
-                int s = Sizes[i];
-                if (s <= size && Fits(s, BandCount) && s > best)
-                {
-                    best = s;
-                }
-            }
-            // Nothing at or below the request fits: the smallest offered size is the best
-            // available without breaking the budget.
-            return best > 0 ? best : Sizes[0];
+            return Clamp(size, BandCount);
         }
 
         /// <summary>
@@ -452,6 +435,41 @@ namespace AsAboveSoBelow
             }
             return Clamp(requested);
         }
+        public static int Clamp(int size, int bandCount)
+        {
+            if (!Active)
+            {
+                return size;
+            }
+
+            int num = -1;
+            for (int i = 0; i < Sizes.Length; i++)
+            {
+                int num2 = Sizes[i];
+                if (num2 <= size && Fits(num2, bandCount) && num2 > num)
+                {
+                    num = num2;
+                }
+            }
+
+            return (num > 0) ? num : Sizes[0];
+        }
+
+        public static int SurfaceBandFor(PlanetTile tile)
+        {
+            return LowerLevelsFor(tile);
+        }
+
+        public static int BandCountFor(PlanetTile tile)
+        {
+            return UpperLevels + LowerLevelsFor(tile) + 1;
+        }
+
+        public static int LowerLevelsFor(PlanetTile tile)
+        {
+            return (!ABOrbitRules.IsSpaceTile(tile)) ? LowerLevels : 0;
+        }
+
     }
 
     /// <summary>
@@ -527,159 +545,137 @@ namespace AsAboveSoBelow
             {
                 return;
             }
-            ABSettings s = ABMod.Settings;
-            if (s == null)
+
+            ABSettings settings = ABMod.Settings;
+            if (settings == null)
             {
                 return;
             }
-            // Bottom strip, clear of the close button vanilla draws below us. Laid out
-            // against the height the window WAS GIVEN, never against the height the strip
-            // currently wants - see ABMapSizeLimit.GrantedStripHeight.
-            float stripH = ABMapSizeLimit.GrantedStripHeight;
-            float top = inRect.height - stripH - CloseButtonClearance;
-            Widgets.DrawLineHorizontal(0f, top, inRect.width);
-            float y = top + 8f;
 
+            float grantedStripHeight = ABMapSizeLimit.GrantedStripHeight;
+            float num = inRect.height - grantedStripHeight - 50f;
+            Widgets.DrawLineHorizontal(0f, num, inRect.width);
+            float num2 = num + 8f;
             Text.Font = GameFont.Medium;
-            Widgets.Label(new Rect(0f, y, 160f, 32f), "AB_LevelsHeading".Translate());
+            Widgets.Label(new Rect(0f, num2, 160f, 32f), "AB_LevelsHeading".Translate());
             Text.Font = GameFont.Small;
-
-            // THE MASTER SWITCH, ON THE HEADING ROW. It sits beside the word it governs so
-            // there is no doubt about what collapses: unticking it takes the whole section
-            // below away AND hands vanilla's map-size column back (ABMapSizeLimit.Active).
-            bool multi = s.multiLevel;
-            Rect toggle = new Rect(174f, y + 4f, 300f, 24f);
-            Widgets.CheckboxLabeled(toggle, "AB_LevelsEnable".Translate(), ref multi);
-            TooltipHandler.TipRegion(toggle, "AB_LevelsEnableTip".Translate());
-            if (multi != s.multiLevel)
+            bool checkOn = settings.multiLevel;
+            Rect rect = new Rect(174f, num2 + 4f, 300f, 24f);
+            Widgets.CheckboxLabeled(rect, "AB_LevelsEnable".Translate(), ref checkOn);
+            TooltipHandler.TipRegion(rect, "AB_LevelsEnableTip".Translate());
+            if (checkOn != settings.multiLevel)
             {
-                s.multiLevel = multi;
-                s.Write();
+                settings.multiLevel = checkOn;
+                settings.Write();
                 Patch_AdvancedGameConfig_ABTallerWindow.RequestResize(window);
-                if (!multi)
+                if (!checkOn)
                 {
-                    // Leave the player on a size VANILLA offers, or its radio column comes
-                    // back with nothing selected: our tiers (126/190/254) are not in
-                    // vanilla's list, and 250 is the value GameInitData starts on anyway.
                     Find.GameInitData.mapSize = 250;
                 }
-                // Turning it back ON needs no snap here - Active is live, so the postfix's
-                // own every-frame snap clamps the vanilla size onto our ladder below.
             }
-            y += 34f;
 
-            if (!multi)
+            num2 += 34f;
+            if (!checkOn)
             {
-                Color offCol = GUI.color;
+                Color color = GUI.color;
                 GUI.color = new Color(1f, 1f, 1f, 0.62f);
-                Widgets.Label(new Rect(0f, y, Mathf.Min(inRect.width, 900f), 24f),
-                    "AB_LevelsDisabledNote".Translate());
-                GUI.color = offCol;
-                return;
+                Widgets.Label(new Rect(0f, num2, Mathf.Min(inRect.width, 900f), 24f), "AB_LevelsDisabledNote".Translate());
+                GUI.color = color;
             }
-            if (stripH < ABMapSizeLimit.ExpandedStripHeight - 0.5f)
+            else
             {
-                // Just ticked ON inside a window that was sized for the collapsed strip.
-                // The resize requested above lands at the end of this frame; drawing the
-                // full section into the short allowance would put it through vanilla's
-                // columns for exactly one frame, so skip it instead.
-                return;
-            }
-
-            int upper = s.upperLevels;
-            int lower = s.lowerLevels;
-            float rowY = y;
-            rowY = Spinner(0f, rowY, 300f, "AB_LevelsAbove".Translate(), ref upper,
-                0, ABMapSizeLimit.MaxUpperLevels);
-            rowY = Spinner(0f, rowY, 300f, "AB_LevelsBelow".Translate(), ref lower,
-                0, ABMapSizeLimit.MaxLowerLevels);
-
-            // OUR size selector - the authoritative one.
-            //
-            // Vanilla's column above is locked, because swapping its MapSizes array by
-            // reflection proved unreliable and the old code then re-snapped mapSize every
-            // frame, which silently undid whatever the player clicked - the "nothing is
-            // selected" report. These buttons write GameInitData.mapSize directly, so a
-            // click sticks and the snap below never has anything to correct.
-            float sizeX = 330f;
-            float sizeY = y;
-            Text.Font = GameFont.Small;
-            Widgets.Label(new Rect(sizeX, sizeY - 26f, 300f, 24f), ChooserStrings.PerLevelSize);
-            int[] sizes = ABMapSizeLimit.Sizes;
-            for (int i = 0; i < sizes.Length; i++)
-            {
-                int candidate = sizes[i];
-                bool affordable = ABMapSizeLimit.Fits(candidate, ABMapSizeLimit.BandCount);
-                Rect row = new Rect(sizeX, sizeY, 300f, 26f);
-                string label = ChooserStrings.SizeLabel(i);
-                Color prev = GUI.color;
-                if (!affordable)
+                if (grantedStripHeight < 239.5f)
                 {
-                    GUI.color = new Color(1f, 1f, 1f, 0.4f);
+                    return;
                 }
-                if (Widgets.RadioButtonLabeled(row, label,
-                        Find.GameInitData.mapSize == candidate)
-                    && affordable)
+
+                int value = settings.upperLevels;
+                int value2 = settings.lowerLevels;
+                float y = num2;
+                y = Spinner(0f, y, 300f, "AB_LevelsAbove".Translate(), ref value, 0, 3);
+                bool flag = ABOrbitRules.OrbitStartExpected();
+                if (flag)
                 {
-                    Find.GameInitData.mapSize = candidate;
+                    Color color2 = GUI.color;
+                    GUI.color = new Color(1f, 1f, 1f, 0.62f);
+                    Widgets.Label(new Rect(0f, y + 2f, 300f, 24f), "AB_LevelsBelow".Translate() + ": " + "AB_LevelsBelowOrbit".Translate());
+                    GUI.color = color2;
+                    y += 28f;
                 }
-                GUI.color = prev;
-                sizeY += 28f;
-            }
+                else
+                {
+                    y = Spinner(0f, y, 300f, "AB_LevelsBelow".Translate(), ref value2, 0, 3);
+                }
 
-            if (upper != s.upperLevels || lower != s.lowerLevels)
-            {
-                s.upperLevels = upper;
-                s.lowerLevels = lower;
-                s.Write();
-                // The affordable size may have just changed under the selection.
-                Find.GameInitData.mapSize = ABMapSizeLimit.Clamp(Find.GameInitData.mapSize);
-            }
+                float x = 330f;
+                float num3 = num2;
+                Text.Font = GameFont.Small;
+                Widgets.Label(new Rect(x, num3 - 26f, 300f, 24f), ChooserStrings.PerLevelSize);
+                int[] sizes = ABMapSizeLimit.Sizes;
+                for (int i = 0; i < sizes.Length; i++)
+                {
+                    int num4 = sizes[i];
+                    bool flag2 = ABMapSizeLimit.Fits(num4, flag ? (ABMapSizeLimit.UpperLevels + 1) : ABMapSizeLimit.BandCount);
+                    Rect rect2 = new Rect(x, num3, 300f, 26f);
+                    string labelText = ChooserStrings.SizeLabel(i);
+                    Color color3 = GUI.color;
+                    if (!flag2)
+                    {
+                        GUI.color = new Color(1f, 1f, 1f, 0.4f);
+                    }
 
-            // Readout in its own column, so a long localised string can never reflow over
-            // the spinner buttons.
-            int bandCount = ABMapSizeLimit.BandCount;
-            int size = Find.GameInitData.mapSize;
-            int cells = ABMapSizeLimit.StackedCells(size, bandCount);
-            float infoX = 660f;
-            float infoW = Mathf.Max(220f, inRect.width - infoX);
-            float infoY = y;
-            ChooserStrings.Refresh(bandCount, size, cells);
-            Widgets.Label(new Rect(infoX, infoY, infoW, 24f), ChooserStrings.Summary);
-            infoY += 26f;
+                    if (Widgets.RadioButtonLabeled(rect2, labelText, Find.GameInitData.mapSize == num4) & flag2)
+                    {
+                        Find.GameInitData.mapSize = num4;
+                    }
 
-            // Colour against the BUDGET ITSELF, not against Fits(): once the player has
-            // lifted the cap, Fits() is unconditionally true, and that is exactly the state
-            // in which the warning matters most. An unlocked map that is 2x over budget must
-            // still say so, every time the player looks at this screen.
-            Color old = GUI.color;
-            bool over = cells > ABMapSizeLimit.CellBudget;
-            if (over)
-            {
-                GUI.color = new Color(1f, 0.4f, 0.4f);
-            }
-            Widgets.Label(new Rect(infoX, infoY, infoW, 24f), ChooserStrings.Cells);
-            infoY += 26f;
-            if (over)
-            {
-                Widgets.Label(new Rect(infoX, infoY, infoW, 44f), ChooserStrings.OverBudget);
-                infoY += 46f;
-            }
-            GUI.color = old;
+                    GUI.color = color3;
+                    num3 += 28f;
+                }
 
-            // Headroom: the useful question while spending a budget is "what else could I
-            // afford", not only "what am I spending". Makes the dimension-versus-levels
-            // trade visible BEFORE a size option greys out.
-            GUI.color = new Color(1f, 1f, 1f, 0.7f);
-            Widgets.Label(new Rect(infoX, infoY, infoW, 24f), ChooserStrings.Headroom);
-            GUI.color = old;
-            infoY += 26f;
+                if (value != settings.upperLevels || value2 != settings.lowerLevels)
+                {
+                    settings.upperLevels = value;
+                    settings.lowerLevels = value2;
+                    settings.Write();
+                    Find.GameInitData.mapSize = ABMapSizeLimit.Clamp(Find.GameInitData.mapSize);
+                }
 
-            if (bandCount <= 1)
-            {
-                GUI.color = new Color(1f, 1f, 1f, 0.62f);
-                Widgets.Label(new Rect(infoX, infoY, infoW, 44f), ChooserStrings.NoneNote);
-                GUI.color = old;
+                int num5 = (flag ? (ABMapSizeLimit.UpperLevels + 1) : ABMapSizeLimit.BandCount);
+                int mapSize = Find.GameInitData.mapSize;
+                int num6 = ABMapSizeLimit.StackedCells(mapSize, num5);
+                float num7 = 660f;
+                float width = Mathf.Max(220f, inRect.width - num7);
+                float num8 = num2;
+                ChooserStrings.Refresh(num5, mapSize, num6);
+                Widgets.Label(new Rect(num7, num8, width, 24f), ChooserStrings.Summary);
+                num8 += 26f;
+                Color color4 = GUI.color;
+                bool flag3 = num6 > 146000;
+                if (flag3)
+                {
+                    GUI.color = new Color(1f, 0.4f, 0.4f);
+                }
+
+                Widgets.Label(new Rect(num7, num8, width, 24f), ChooserStrings.Cells);
+                num8 += 26f;
+                if (flag3)
+                {
+                    Widgets.Label(new Rect(num7, num8, width, 44f), ChooserStrings.OverBudget);
+                    num8 += 46f;
+                }
+
+                GUI.color = color4;
+                GUI.color = new Color(1f, 1f, 1f, 0.7f);
+                Widgets.Label(new Rect(num7, num8, width, 24f), ChooserStrings.Headroom);
+                GUI.color = color4;
+                num8 += 26f;
+                if (num5 <= 1)
+                {
+                    GUI.color = new Color(1f, 1f, 1f, 0.62f);
+                    Widgets.Label(new Rect(num7, num8, width, 44f), ChooserStrings.NoneNote);
+                    GUI.color = color4;
+                }
             }
         }
 

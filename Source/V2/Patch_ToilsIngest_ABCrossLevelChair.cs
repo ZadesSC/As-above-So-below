@@ -1,0 +1,181 @@
+using System;
+using System.Collections.Generic;
+using HarmonyLib;
+using RimWorld;
+using Verse;
+using Verse.AI;
+
+namespace AsAboveSoBelow;
+[HarmonyPatch(typeof(Toils_Ingest), "TryFindChairOrSpot")]
+public static class Patch_ToilsIngest_ABCrossLevelChair
+{
+    private const double FlightCost = 7;
+    private static readonly List<KeyValuePair<Building_Door, Building_Door>> tmpPairs = new List<KeyValuePair<Building_Door, Building_Door>>();
+    private static void Postfix(Pawn pawn, Thing ingestible, ref IntVec3 cell, ref bool __result)
+    {
+        try
+        {
+            if (pawn == null || !pawn.Spawned || ingestible == null || !UnityData.IsInMainThread)
+            {
+                return;
+            }
+
+            Map map = pawn.Map;
+            if (map != null && ABBands.Banded(map) && ABWormhole.PairCount(map) != 0 && (!__result || !cell.IsValid || !IsSittable(cell.GetEdifice(map))))
+            {
+                float num = 0f;
+                IngestibleProperties ingestibleProperties = ingestible.def?.ingestible;
+                if (ingestibleProperties != null)
+                {
+                    num = ingestibleProperties.chairSearchRadius;
+                }
+                else if (ingestible is Building_NutrientPasteDispenser { DispensableDef: var dispensableDef } building_NutrientPasteDispenser && dispensableDef?.ingestible != null)
+                {
+                    num = building_NutrientPasteDispenser.DispensableDef.ingestible.chairSearchRadius;
+                }
+
+                if (num > 0f && TryFindCrossLevelChair(pawn, map, num, out var seat))
+                {
+                    cell = seat;
+                    __result = true;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.WarningOnce("[As above, So below] V2: cross-level chair search threw: " + ex.Message, 11218690);
+        }
+    }
+
+    private static bool IsSittable(Thing thing)
+    {
+        return thing?.def.building?.isSittable == true;
+    }
+
+    private static bool TryFindCrossLevelChair(Pawn pawn, Map map, float radius, out IntVec3 seat)
+    {
+        seat = IntVec3.Invalid;
+        tmpPairs.Clear();
+        ABWormhole.CollectPairs(map, tmpPairs);
+        IntVec3 position = pawn.Position;
+        double best = double.PositiveInfinity;
+        Thing bestChair = null;
+        for (int i = 0; i < tmpPairs.Count; i++)
+        {
+            if (!Consider(pawn, map, position, tmpPairs[i].Key, tmpPairs[i].Value, radius, ref best, ref bestChair))
+            {
+                Consider(pawn, map, position, tmpPairs[i].Value, tmpPairs[i].Key, radius, ref best, ref bestChair);
+            }
+        }
+
+        tmpPairs.Clear();
+        if (bestChair == null)
+        {
+            return false;
+        }
+
+        return Toils_Ingest.TryFindFreeSittingSpotOnThing(bestChair, pawn, out seat);
+    }
+
+    private static bool Consider(Pawn pawn, Map map, IntVec3 from, Building_Door near, Building_Door far, double radius, ref double best, ref Thing bestChair)
+    {
+        if (near == null || far == null || !near.Spawned || !far.Spawned || !ABBands.SameBand(map, near.Position, from))
+        {
+            return false;
+        }
+
+        if (ABBands.SameBand(map, far.Position, from))
+        {
+            return true;
+        }
+
+        double costToExit = Math.Sqrt((near.Position - from).LengthHorizontalSquared) + FlightCost;
+        if (costToExit > radius || costToExit >= best)
+        {
+            return true;
+        }
+
+        if (!pawn.CanReach(near, PathEndMode.OnCell, Danger.Deadly))
+        {
+            return true;
+        }
+
+        IntVec3 farRoot = far.Position;
+        var request = ThingRequest.ForGroup(ThingRequestGroup.BuildingArtificial);
+        var traverse = TraverseParms.For(pawn);
+        // Score the full route before testing reachability. A native float radius derived
+        // from the remaining budget can round inward or exclude equality and zero.
+        foreach (Thing chair in map.listerThings.ThingsMatching(request))
+        {
+            if (!IsSittable(chair))
+            {
+                continue;
+            }
+
+            double total = costToExit + Math.Sqrt((chair.Position - farRoot).LengthHorizontalSquared);
+            if (total <= radius && total < best && ABBands.SameBand(map, chair.Position, farRoot)
+                && ChairValidator(pawn, chair) && chair.Position.GetDangerFor(pawn, map) == Danger.None
+                && map.reachability.CanReach(farRoot, chair, PathEndMode.OnCell, traverse))
+            {
+                best = total;
+                bestChair = chair;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool ChairValidator(Pawn pawn, Thing t)
+    {
+        if (t.Faction != pawn.Faction && pawn.Faction != null && pawn.Faction.IsPlayer)
+        {
+            return false;
+        }
+
+        if (!Toils_Ingest.TryFindFreeSittingSpotOnThing(t, pawn, out var cell))
+        {
+            return false;
+        }
+
+        if (t.IsForbidden(pawn))
+        {
+            return false;
+        }
+
+        if (pawn.IsColonist && t.Position.Fogged(t.Map))
+        {
+            return false;
+        }
+
+        if (!pawn.CanReserve(t))
+        {
+            return false;
+        }
+
+        if (!t.IsSociallyProper(pawn))
+        {
+            return false;
+        }
+
+        if (t.IsBurning())
+        {
+            return false;
+        }
+
+        if (t.HostileTo(pawn))
+        {
+            return false;
+        }
+
+        for (int i = 0; i < 4; i++)
+        {
+            Building edifice = (cell + GenAdj.CardinalDirections[i]).GetEdifice(t.Map);
+            if (edifice != null && edifice.def.surfaceType == SurfaceType.Eat)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+}

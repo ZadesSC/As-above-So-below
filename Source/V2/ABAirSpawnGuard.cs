@@ -160,7 +160,7 @@ namespace AsAboveSoBelow
         /// scenery.</summary>
         internal static bool IsLooseDecoration(Thing t)
         {
-            return t != null && t.Faction == null && RestsOnGround(t);
+            return t != null && t.Faction == null && !IsDerivedLevelSpawn(t) && RestsOnGround(t);
         }
 
         /// <summary>
@@ -293,6 +293,11 @@ namespace AsAboveSoBelow
             }
             return false;
         }
+        internal static bool IsDerivedLevelSpawn(Thing t)
+        {
+            return t is Building_ABStairs2 || ABColumnNetworks.IsCarrier(t.def);
+        }
+
     }
 
     /// <summary>
@@ -307,79 +312,118 @@ namespace AsAboveSoBelow
     })]
     public static class Patch_GenSpawn_ABNoAirSpawn
     {
-        private static void Prefix(Thing newThing, ref IntVec3 loc, Map map, Rot4 rot,
-            bool respawningAfterLoad)
+        private static bool Prefix(Thing newThing, ref IntVec3 loc, Map map, Rot4 rot, bool respawningAfterLoad)
         {
             try
             {
-                // A load is replaying placements this guard already approved once. Moving
-                // them again would drift the colony a little further every reload.
                 if (respawningAfterLoad || map == null)
                 {
-                    return;
+                    return true;
                 }
-                // ⚠ §57: THE CARVE IS AUTHORITATIVE ABOUT NON-SURFACE BANDS. It is
-                // deliberately filling them with rock, and this guard exists to move things
-                // OUT of them - so while it runs, every correction here is wrong by
-                // construction. Same reasoning, and the same window, as ABSkySync.Suspended.
+
+                if (ABBandScope.Active && !ABAirSpawnGuard.IsDerivedLevelSpawn(newThing) && ABBandScope.RefusesSpawnAt(map, loc))
+                {
+                    return false;
+                }
+
                 if (ABBandedGeneration.CarveInProgress)
                 {
-                    return;
+                    return true;
                 }
+
+                if (VanillaGravshipCompat.IsLandingStructure(newThing))
+                {
+                    ABBandMap aBBandMap = ABBands.CompOf(map);
+                    if (aBBandMap != null && aBBandMap.Banded)
+                    {
+                        VanillaGravshipCompat.TryRedirectLanding(newThing, ref loc, map, aBBandMap);
+                    }
+
+                    return true;
+                }
+
                 if (!ABAirSpawnGuard.RestsOnGround(newThing))
                 {
-                    return;
+                    return true;
                 }
-                ABBandMap bands = ABBands.CompOf(map);
-                if (bands == null || !bands.Banded)
+
+                if (ABAirSpawnGuard.IsDerivedLevelSpawn(newThing))
                 {
-                    return; // non-banded map, or still mid-generation: not ours to correct
+                    return true;
                 }
-                // Rule two, checked first because it subsumes rule one: during the decoration
-                // window a loose thing outside the surface band goes to the surface band,
-                // whether it was floating or sitting comfortably in a cave.
-                if (ABAirSpawnGuard.DecorationWindowOpenFor(map)
-                    && ABAirSpawnGuard.IsLooseDecoration(newThing)
-                    && bands.BandOf(loc) != bands.surfaceBand)
+
+                ABBandMap aBBandMap2 = ABBands.CompOf(map);
+                if (aBBandMap2 == null || !aBBandMap2.Banded)
                 {
-                    if (ABBandSafety.TryFindSurfaceCell(map, bands, loc, true,
-                            out IntVec3 onSurface))
+                    return true;
+                }
+
+                if (ABAirSpawnGuard.DecorationWindowOpenFor(map) && ABAirSpawnGuard.IsLooseDecoration(newThing) && aBBandMap2.BandOf(loc) != aBBandMap2.surfaceBand)
+                {
+                    if (ABBandSafety.TryFindSurfaceCell(map, aBBandMap2, loc, needStandable: true, out var result))
                     {
                         ABAirSpawnGuard.decorMoved++;
-                        ABAirSpawnGuard.lastIntercept = newThing.def.defName + " " + loc
-                            + " -> " + onSurface + " (off-surface decoration)";
-                        ABLog.Dev("Decoration spawn moved to the surface band: "
-                            + ABAirSpawnGuard.lastIntercept + ".");
-                        loc = onSurface;
+                        string[] array = new string[6]
+                        {
+                            newThing.def.defName,
+                            " ",
+                            null,
+                            null,
+                            null,
+                            null
+                        };
+                        IntVec3 intVec = loc;
+                        array[2] = intVec.ToString();
+                        array[3] = " -> ";
+                        intVec = result;
+                        array[4] = intVec.ToString();
+                        array[5] = " (off-surface decoration)";
+                        ABAirSpawnGuard.lastIntercept = string.Concat(array);
+                        ABLog.Dev("Decoration spawn moved to the surface band: " + ABAirSpawnGuard.lastIntercept + ".");
+                        loc = result;
                     }
-                    return;
+
+                    return true;
                 }
+
                 if (!ABAirSpawnGuard.Floating(map, loc, rot, newThing))
                 {
-                    return; // the overwhelmingly common case, and it is one terrain read
+                    return true;
                 }
-                if (ABAirSpawnGuard.TryFindFooting(map, bands, loc, rot, newThing,
-                        out IntVec3 footing))
+
+                if (ABAirSpawnGuard.TryFindFooting(map, aBBandMap2, loc, rot, newThing, out var result2))
                 {
                     ABAirSpawnGuard.intercepted++;
-                    ABAirSpawnGuard.lastIntercept = newThing.def.defName + " " + loc
-                        + " -> " + footing;
+                    string[] array2 = new string[5]
+                    {
+                        newThing.def.defName,
+                        " ",
+                        null,
+                        null,
+                        null
+                    };
+                    IntVec3 intVec = loc;
+                    array2[2] = intVec.ToString();
+                    array2[3] = " -> ";
+                    intVec = result2;
+                    array2[4] = intVec.ToString();
+                    ABAirSpawnGuard.lastIntercept = string.Concat(array2);
                     ABLog.Dev("Air spawn intercepted: " + ABAirSpawnGuard.lastIntercept + ".");
-                    loc = footing;
+                    loc = result2;
                 }
                 else
                 {
-                    // Leaving it in the air is ugly; deleting it is worse, and silently
-                    // doing neither is worst of all. Count it so the report can say so.
                     ABAirSpawnGuard.relocationFailures++;
-                    ABAirSpawnGuard.lastIntercept = newThing.def.defName + " " + loc
-                        + " -> NO FOOTING FOUND";
+                    string defName = newThing.def.defName;
+                    IntVec3 intVec = loc;
+                    ABAirSpawnGuard.lastIntercept = defName + " " + intVec.ToString() + " -> NO FOOTING FOUND";
                 }
             }
             catch
             {
-                // Never let the safety net be the thing that breaks a spawn.
             }
+
+            return true;
         }
     }
 }

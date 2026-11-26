@@ -1,3 +1,4 @@
+using System.Reflection;
 using System;
 using System.Collections.Generic;
 using HarmonyLib;
@@ -76,167 +77,396 @@ namespace AsAboveSoBelow
             scans = 0;
             found = 0;
             rejectedByFlags = 0;
+            blindedBySmoke = 0;
+            outOfReach = 0;
+            smokeOnLine = 0;
         }
 
         public static string CounterReport()
         {
-            return "acquisition: scans=" + scans + " found=" + found
-                + " rejectedByFlags=" + rejectedByFlags;
+            return "acquisition: scans=" + scans + " found=" + found + " outOfReach=" + outOfReach + " rejectedByFlags=" + rejectedByFlags + " blindedBySmoke=" + blindedBySmoke + " smokeOnLine=" + smokeOnLine;
         }
-
-        public static IAttackTarget FindCrossBandTarget(IAttackTargetSearcher searcher,
-            TargetScanFlags flags, Predicate<Thing> validator, float minDistance,
-            float maxDistance, IntVec3 locus, float maxTravelRadiusFromLocus,
-            bool canTakeTargetsCloserThanEffectiveMinRange, bool onlyRanged)
+        private static bool PassesFlags(IAttackTargetSearcher searcher, Thing searcherThing, Lord lord, Pawn searcherPawn, Thing t, IAttackTarget target, TargetScanFlags flags, bool onlyTargetMachines, Verb verb, bool canBashDoors, bool canBashFences)
         {
-            Thing searcherThing = searcher?.Thing;
-            if (searcherThing == null || !searcherThing.Spawned || !ABCombatV2.Enabled)
-            {
-                return null;
-            }
-            Map map = searcherThing.Map;
-            ABBandMap bands = ABBands.CompOf(map);
-            if (bands == null || !bands.Banded)
-            {
-                return null;
-            }
-            Verb verb = searcher.CurrentEffectiveVerb;
-            if (verb == null || verb.verbProps == null || verb.verbProps.IsMeleeAttack)
-            {
-                return null;
-            }
-            IntVec3 root = searcherThing.Position;
-            int rootBand = bands.BandOf(root);
-            List<IAttackTarget> candidates = map.attackTargetsCache.GetPotentialTargetsFor(searcher);
-            if (candidates == null || candidates.Count == 0)
-            {
-                return null;
-            }
-
-            scans++;
-            // ⚠ THESE ARRIVE ALREADY CLAMPED now that the hook is on BestAttackTarget: its
-            // caller folded verbProps.minRange and EffectiveRange in. Re-applying the clamp
-            // is harmless (max/min are idempotent) and keeps the method honest for the direct
-            // callers - JobGiver_AIFightEnemy passes 0f and a raw acquire radius.
-            float minRange = Mathf.Max(minDistance, verb.verbProps.minRange);
-            float maxRange = Mathf.Min(maxDistance, verb.EffectiveRange);
-            bool overhead = ABShaft.IsOverheadFire(verb);
-            Pawn searcherPawn = searcher as Pawn;
-            Lord lord = searcherPawn?.GetLord();
-
-            IAttackTarget best = null;
-            float bestDist = float.MaxValue;
-            for (int i = 0; i < candidates.Count; i++)
-            {
-                IAttackTarget target = candidates[i];
-                Thing t = target?.Thing;
-                if (t == null || !t.Spawned || t.Map != map || t == searcherThing)
-                {
-                    continue;
-                }
-                // Same band is vanilla's business; it already had its chance and lost.
-                if (bands.BandOf(t.Position) == rootBand)
-                {
-                    continue;
-                }
-                if (target.ThreatDisabled(searcher) || !searcherThing.HostileTo(t))
-                {
-                    continue;
-                }
-                if (validator != null && !validator(t))
-                {
-                    continue;
-                }
-                if (!PassesFlags(searcher, searcherThing, lord, searcherPawn, t, target, flags))
-                {
-                    rejectedByFlags++;
-                    continue;
-                }
-                // Siege and defend-point lords cap how far a member may stray from its flag.
-                // Measured band-locally, like every other distance here: the raw version would
-                // put every cross-band target a Slot outside the radius and quietly restore
-                // the bug this file exists to fix.
-                if (maxTravelRadiusFromLocus < 9999f)
-                {
-                    float allowed = maxTravelRadiusFromLocus + verb.EffectiveRange;
-                    IntVec3 targetHere = bands.Translate(t.Position, bands.BandOf(locus));
-                    if ((targetHere - locus).LengthHorizontalSquared > allowed * allowed)
-                    {
-                        rejectedByFlags++;
-                        continue;
-                    }
-                }
-                // The verb's own minimum range, per target, exactly as vanilla's
-                // canTakeTargetsCloserThanEffectiveMinRange:false branch does it - except
-                // measured on the SOLVED distance rather than the raw one, which is the whole
-                // point. BestShootTargetFromCurrentPosition always passes false.
-                float perTargetMin = canTakeTargetsCloserThanEffectiveMinRange
-                    ? minRange
-                    : Mathf.Max(minRange, verb.verbProps.EffectiveMinRange(t, searcherThing));
-                if (!ABShaft.TrySolve(map, root, t.Position, maxRange, perTargetMin, overhead,
-                        out ABShotSolution sol))
-                {
-                    continue;
-                }
-                if (sol.distance < bestDist)
-                {
-                    bestDist = sol.distance;
-                    best = target;
-                }
-            }
-            if (best != null)
-            {
-                found++;
-                ABV2Debug.Combat("acquired cross-band " + best.Thing.LabelShortCap + " at "
-                    + best.Thing.Position + " for " + searcherThing.LabelShortCap
-                    + " dist " + bestDist.ToString("0.0"));
-            }
-            return best;
-        }
-
-        /// <summary>
-        /// The subset of vanilla's innerValidator that is not about line of sight. Named
-        /// against the original so the two can be diffed when Ludeon changes it.
-        /// </summary>
-        private static bool PassesFlags(IAttackTargetSearcher searcher, Thing searcherThing,
-            Lord lord, Pawn searcherPawn, Thing t, IAttackTarget target, TargetScanFlags flags)
-        {
-            // Lord veto. A raid's lord decides what its members may engage, and ignoring it
-            // is how a besieger abandons the siege to shoot through a floor.
-            if (searcherPawn != null && lord != null
-                && !lord.LordJob.ValidateAttackTarget(searcherPawn, t))
+            if ((flags & TargetScanFlags.IgnoreNonCombatants) != 0 && t is Pawn pawn && !pawn.IsCombatant())
             {
                 return false;
             }
-            if ((flags & TargetScanFlags.NeedNotUnderThickRoof) != TargetScanFlags.None)
+
+            if (searcherPawn != null && lord != null && !lord.LordJob.ValidateAttackTarget(searcherPawn, t))
             {
-                // ⚠ THIS IS THE ONE THAT MATTERS FOR MORTARS, and on a banded map it is not
-                // decoration: every level below the surface is under thick rock roof by
-                // construction, so this single check is what stops an AI mortar crew trying
-                // to shell your basement. Player-forced mortar targets bypass acquisition
-                // entirely, which is the intended asymmetry - vanilla behaves the same way.
+                return false;
+            }
+
+            if ((flags & TargetScanFlags.NeedNotUnderThickRoof) != 0)
+            {
                 RoofDef roof = t.Position.GetRoof(t.Map);
                 if (roof != null && roof.isThickRoof)
                 {
                     return false;
                 }
             }
-            if ((flags & TargetScanFlags.NeedThreat) != TargetScanFlags.None
-                && target.ThreatDisabled(searcher))
+
+            if ((flags & TargetScanFlags.LOSBlockableByGas) != 0 && (flags & TargetScanFlags.NeedLOSToAll) != 0 && !IgnoresAccuracyMaluses(verb) && t.Position.AnyGas(t.Map, GasType.BlindSmoke))
             {
                 return false;
             }
-            if ((flags & TargetScanFlags.NeedAutoTargetable) != TargetScanFlags.None
-                && !AttackTargetFinder.IsAutoTargetable(target))
+
+            if (((flags & TargetScanFlags.NeedThreat) != 0 || (flags & TargetScanFlags.NeedAutoTargetable) != 0) && target.ThreatDisabled(searcher))
             {
                 return false;
             }
-            if ((flags & TargetScanFlags.NeedNonBurning) != TargetScanFlags.None && t.IsBurning())
+
+            if ((flags & TargetScanFlags.NeedAutoTargetable) != 0 && !AttackTargetFinder.IsAutoTargetable(target))
             {
                 return false;
             }
+
+            if ((flags & TargetScanFlags.NeedActiveThreat) != 0 && !GenHostility.IsActiveThreatTo(target, searcherThing.Faction))
+            {
+                return false;
+            }
+
+            if (onlyTargetMachines && t is Pawn pawn2 && pawn2.RaceProps.IsFlesh)
+            {
+                return false;
+            }
+
+            if ((flags & TargetScanFlags.NeedNonBurning) != 0 && t.IsBurning())
+            {
+                return false;
+            }
+
+            if (searcherThing.def.race != null && (int)searcherThing.def.race.intelligence >= 2)
+            {
+                CompExplosive compExplosive = t.TryGetComp<CompExplosive>();
+                if (compExplosive != null && compExplosive.wickStarted)
+                {
+                    return false;
+                }
+            }
+
+            if ((searcherPawn != null && searcherPawn.IsColonist) || searcherThing.Faction == Faction.OfPlayer)
+            {
+                if (t.def.size.x == 1 && t.def.size.z == 1)
+                {
+                    if (t.Position.Fogged(t.Map))
+                    {
+                        return false;
+                    }
+                }
+                else
+                {
+                    bool flag = false;
+                    foreach (IntVec3 item in t.OccupiedRect())
+                    {
+                        if (!item.Fogged(t.Map))
+                        {
+                            flag = true;
+                            break;
+                        }
+                    }
+
+                    if (!flag)
+                    {
+                        return false;
+                    }
+                }
+            }
+
+            if ((flags & TargetScanFlags.NeedReachable) != 0)
+            {
+                if (searcherPawn != null)
+                {
+                    if (!searcherPawn.CanReach(t, PathEndMode.Touch, Danger.Some, canBashDoors, canBashFences))
+                    {
+                        return false;
+                    }
+                }
+                else
+                {
+                    TraverseMode mode = (canBashDoors ? TraverseMode.PassDoors : TraverseMode.NoPassClosedDoors);
+                    if (!searcherThing.Map.reachability.CanReach(searcherThing.Position, t, PathEndMode.Touch, TraverseParms.For(mode)))
+                    {
+                        return false;
+                    }
+                }
+            }
+
             return true;
         }
+
+        private static bool IgnoresAccuracyMaluses(Verb verb)
+        {
+            CompUniqueWeapon comp;
+            return verb.EquipmentSource != null && verb.EquipmentSource.TryGetComp<CompUniqueWeapon>(out comp) && comp.IgnoreAccuracyMaluses;
+        }
+
+        private static float ShootingScore(IAttackTarget target, Thing t, IAttackTargetSearcher searcher, Thing searcherThing, Verb verb, ABBandMap bands, IntVec3 root)
+        {
+            float lengthHorizontal = (bands.Translate(t.Position, bands.BandOf(root)) - root).LengthHorizontal;
+            float num = 60f - Mathf.Min(lengthHorizontal, 40f);
+            if (target.TargetCurrentlyAimingAt == searcherThing)
+            {
+                num += 10f;
+            }
+
+            if (searcher.LastAttackedTarget == t && Find.TickManager.TicksGame - searcher.LastAttackTargetTick <= 300)
+            {
+                num += 40f;
+            }
+
+            num -= CoverUtility.CalculateOverallBlockChance(t.Position, root, t.Map) * 10f;
+            if (target is Pawn pawn)
+            {
+                if (!pawn.IsCombatant())
+                {
+                    num -= 50f;
+                }
+                else if (pawn.DevelopmentalStage.Juvenile())
+                {
+                    num -= 25f;
+                }
+
+                if (verb.verbProps.ai_TargetHasRangedAttackScoreOffset != 0f && pawn.CurrentEffectiveVerb != null && pawn.CurrentEffectiveVerb.verbProps.Ranged)
+                {
+                    num += verb.verbProps.ai_TargetHasRangedAttackScoreOffset;
+                }
+
+                if (pawn.Downed)
+                {
+                    num -= 50f;
+                }
+            }
+
+            if (BlastRadiusOffset != null)
+            {
+                num += BlastRadiusOffset(target, searcher, verb);
+            }
+
+            return num * target.TargetPriorityFactor;
+        }
+
+        private static IAttackTarget PickByScore(List<Candidate> shootable, float bestScore)
+        {
+            if (shootable.Count == 0)
+            {
+                return null;
+            }
+
+            if (bestScore < 1f)
+            {
+                for (int i = 0; i < shootable.Count; i++)
+                {
+                    if (shootable[i].score == bestScore)
+                    {
+                        return shootable[i].target;
+                    }
+                }
+
+                return shootable[0].target;
+            }
+
+            float num = bestScore - 30f;
+            float num2 = 0f;
+            for (int j = 0; j < shootable.Count; j++)
+            {
+                if (shootable[j].score >= num)
+                {
+                    num2 += Mathf.InverseLerp(num, bestScore, shootable[j].score);
+                }
+            }
+
+            if (num2 <= 0f)
+            {
+                return shootable[0].target;
+            }
+
+            float num3 = Rand.Value * num2;
+            IAttackTarget result = null;
+            for (int k = 0; k < shootable.Count; k++)
+            {
+                if (!(shootable[k].score < num))
+                {
+                    float num4 = Mathf.InverseLerp(num, bestScore, shootable[k].score);
+                    result = shootable[k].target;
+                    if (num4 > 0f && num3 < num4)
+                    {
+                        return result;
+                    }
+
+                    num3 -= num4;
+                }
+            }
+
+            return result;
+        }
+
+        public static IAttackTarget FindCrossBandTarget(IAttackTargetSearcher searcher, TargetScanFlags flags, Predicate<Thing> validator, float minDistance, float maxDistance, IntVec3 locus, float maxTravelRadiusFromLocus, bool canTakeTargetsCloserThanEffectiveMinRange, bool onlyRanged, bool canBashDoors, bool canBashFences)
+        {
+            Thing thing = searcher?.Thing;
+            if (thing == null || !thing.Spawned || !ABCombatV2.Enabled)
+            {
+                return null;
+            }
+
+            Map map = thing.Map;
+            ABBandMap aBBandMap = ABBands.CompOf(map);
+            if (aBBandMap == null || !aBBandMap.Banded)
+            {
+                return null;
+            }
+
+            Verb currentEffectiveVerb = searcher.CurrentEffectiveVerb;
+            if (currentEffectiveVerb == null || currentEffectiveVerb.verbProps == null || currentEffectiveVerb.verbProps.IsMeleeAttack)
+            {
+                return null;
+            }
+
+            Pawn pawn = searcher as Pawn;
+            if (pawn != null && pawn.InAggroMentalState)
+            {
+                return null;
+            }
+
+            IntVec3 position = thing.Position;
+            int num = aBBandMap.BandOf(position);
+            if ((flags & TargetScanFlags.LOSBlockableByGas) != 0 && (flags & TargetScanFlags.NeedLOSToAll) != 0 && !IgnoresAccuracyMaluses(currentEffectiveVerb) && position.AnyGas(map, GasType.BlindSmoke))
+            {
+                blindedBySmoke++;
+                return null;
+            }
+
+            List<IAttackTarget> potentialTargetsFor = map.attackTargetsCache.GetPotentialTargetsFor(searcher);
+            if (potentialTargetsFor == null || potentialTargetsFor.Count == 0)
+            {
+                return null;
+            }
+
+            if (tmpPotential == null)
+            {
+                tmpPotential = new List<IAttackTarget>();
+            }
+
+            List<IAttackTarget> list = tmpPotential;
+            list.Clear();
+            list.AddRange(potentialTargetsFor);
+            scans++;
+            float num2 = Mathf.Max(minDistance, currentEffectiveVerb.verbProps.minRange);
+            float num3 = Mathf.Min(maxDistance, currentEffectiveVerb.EffectiveRange);
+            Lord lord = ((pawn != null) ? pawn.GetLord() : null);
+            bool onlyTargetMachines = currentEffectiveVerb.IsEMP();
+            if (tmpCandidates == null)
+            {
+                tmpCandidates = new List<Candidate>();
+            }
+
+            List<Candidate> list2 = tmpCandidates;
+            list2.Clear();
+            float num4 = float.MinValue;
+            for (int i = 0; i < list.Count; i++)
+            {
+                IAttackTarget attackTarget = list[i];
+                Thing thing2 = attackTarget?.Thing;
+                if (thing2 == null || !thing2.Spawned || thing2.Map != map || thing2 == thing || attackTarget == searcher || aBBandMap.BandOf(thing2.Position) == num || !thing.HostileTo(thing2))
+                {
+                    continue;
+                }
+
+                float num5 = num3 + (float)Mathf.Max(thing2.def.size.x, thing2.def.size.z);
+                if ((float)(aBBandMap.Translate(thing2.Position, num) - position).LengthHorizontalSquared > num5 * num5)
+                {
+                    outOfReach++;
+                    continue;
+                }
+
+                if (maxTravelRadiusFromLocus < 9999f)
+                {
+                    float num6 = maxTravelRadiusFromLocus + currentEffectiveVerb.EffectiveRange;
+                    IntVec3 intVec = aBBandMap.Translate(thing2.Position, aBBandMap.BandOf(locus));
+                    if ((float)(intVec - locus).LengthHorizontalSquared > num6 * num6)
+                    {
+                        rejectedByFlags++;
+                        continue;
+                    }
+                }
+
+                if (validator != null && !validator(thing2))
+                {
+                    continue;
+                }
+
+                if (!PassesFlags(searcher, thing, lord, pawn, thing2, attackTarget, flags, onlyTargetMachines, currentEffectiveVerb, canBashDoors, canBashFences))
+                {
+                    rejectedByFlags++;
+                    continue;
+                }
+
+                float minRange = (canTakeTargetsCloserThanEffectiveMinRange ? num2 : Mathf.Max(num2, currentEffectiveVerb.verbProps.EffectiveMinRange(thing2, thing)));
+                if (!ABCombatV2.TrySolveWithin(currentEffectiveVerb, position, thing2, num3, minRange, out var sol, out var source, out var dest))
+                {
+                    continue;
+                }
+
+                if ((flags & TargetScanFlags.LOSBlockableByGas) != 0 && ((thing2 is Pawn && (flags & TargetScanFlags.NeedLOSToPawns) != 0) || (!(thing2 is Pawn) && (flags & TargetScanFlags.NeedLOSToNonPawns) != 0)) && !IgnoresAccuracyMaluses(currentEffectiveVerb) && Patch_ShotReport_ABBandLocalDistance.SolvedLineHasSmoke(map, aBBandMap, sol, source, dest))
+                {
+                    smokeOnLine++;
+                    continue;
+                }
+
+                float num7 = ShootingScore(attackTarget, thing2, searcher, thing, currentEffectiveVerb, aBBandMap, position);
+                list2.Add(new Candidate { target = attackTarget, score = num7 });
+                if (num7 > num4)
+                {
+                    num4 = num7;
+                }
+            }
+
+            IAttackTarget attackTarget2 = PickByScore(list2, num4);
+            list2.Clear();
+            list.Clear();
+            if (attackTarget2 != null)
+            {
+                found++;
+                ABV2Debug.Combat("acquired cross-band " + attackTarget2.Thing.LabelShortCap + " at " + attackTarget2.Thing.Position.ToString() + " for " + thing.LabelShortCap + " (best score " + num4.ToString("0.0") + ")");
+            }
+
+            return attackTarget2;
+        }
+
+        private static Func<IAttackTarget, IAttackTargetSearcher, Verb, float> MakeBlastRadiusOffset()
+        {
+            try
+            {
+                MethodInfo methodInfo = AccessTools.Method(typeof(AttackTargetFinder), "FriendlyFireBlastRadiusTargetScoreOffset", new Type[3] { typeof(IAttackTarget), typeof(IAttackTargetSearcher), typeof(Verb) });
+                return (methodInfo == null) ? null : AccessTools.MethodDelegate<Func<IAttackTarget, IAttackTargetSearcher, Verb, float>>(methodInfo);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        [ThreadStatic]
+        private static List<IAttackTarget> tmpPotential;
+
+        [ThreadStatic]
+        private static List<Candidate> tmpCandidates;
+
+        private static readonly Func<IAttackTarget, IAttackTargetSearcher, Verb, float> BlastRadiusOffset = MakeBlastRadiusOffset();
+
+        public static int smokeOnLine;
+
+        public static int outOfReach;
+
+        public static int blindedBySmoke;
+
+        private struct Candidate
+        {
+            public IAttackTarget target;
+            public float score;
+        }
+
     }
 
     /// <summary>
@@ -247,25 +477,22 @@ namespace AsAboveSoBelow
     [HarmonyPatch(typeof(AttackTargetFinder), nameof(AttackTargetFinder.BestAttackTarget))]
     public static class Patch_AttackTargetFinder_ABCrossBand
     {
-        private static void Postfix(IAttackTargetSearcher searcher, TargetScanFlags flags,
-            Predicate<Thing> validator, float minDist, float maxDist, IntVec3 locus,
-            float maxTravelRadiusFromLocus, bool canTakeTargetsCloserThanEffectiveMinRange,
-            bool onlyRanged, ref IAttackTarget __result)
+        private static void Postfix(IAttackTargetSearcher searcher, TargetScanFlags flags, Predicate<Thing> validator, float minDist, float maxDist, IntVec3 locus, float maxTravelRadiusFromLocus, bool canBashDoors, bool canTakeTargetsCloserThanEffectiveMinRange, bool canBashFences, bool onlyRanged, ref IAttackTarget __result)
         {
             if (__result != null)
             {
                 return;
             }
+
             try
             {
-                __result = ABCombatAcquisition.FindCrossBandTarget(searcher, flags, validator,
-                    minDist, maxDist, locus, maxTravelRadiusFromLocus,
-                    canTakeTargetsCloserThanEffectiveMinRange, onlyRanged);
+                __result = ABCombatAcquisition.FindCrossBandTarget(searcher, flags, validator, minDist, maxDist, locus, maxTravelRadiusFromLocus, canTakeTargetsCloserThanEffectiveMinRange, onlyRanged, canBashDoors, canBashFences);
             }
             catch (Exception e)
             {
                 ABGuard.Disable(ABGuard.Combat, e, "V2 cross-band acquisition");
             }
         }
+
     }
 }

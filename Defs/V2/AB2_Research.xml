@@ -114,7 +114,7 @@
   <ResearchProjectDef>
     <defName>AB2_TransferColumns</defName>
     <label>transfer columns</label>
-    <description>Run power, ducting, and signal lines through a sealed service column so networks on different floors pool into one.</description>
+    <description>Run ducting and signal lines through a sealed service column so climate and data networks on different floors pool into one. Power columns and risers need only electricity.</description>
     <baseCost>1200</baseCost>
     <techLevel>Industrial</techLevel>
     <researchViewX>6.00</researchViewX>

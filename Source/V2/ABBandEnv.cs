@@ -188,38 +188,39 @@ namespace AsAboveSoBelow
             {
                 return null;
             }
+
             if (bands == null || !bands.Banded)
             {
                 return map.Biome;
             }
-            int level = bands.LevelOf(cell);
-            if (level == 0)
+
+            int num = bands.LevelOf(cell);
+            if (num == 0)
             {
                 return map.Biome;
             }
-            if (level < 0)
+
+            if (ABOrbitRules.InVacuum(map))
             {
-                // A basement carved by ABCavernGen carries a real cave biome, scribed on
-                // the band component so it survives save/load - this is the V2 stand-in
-                // for V1's pocketTileInfo.PrimaryBiome assignment. Uncarved basements
-                // fall through to plain solid rock.
+                return map.Biome;
+            }
+
+            if (num < 0)
+            {
                 if (bands.basementBiome != null)
                 {
                     return bands.basementBiome;
                 }
-                return undergroundBiome
-                    ?? (undergroundBiome = DefDatabase<BiomeDef>.GetNamedSilentFail("AB_Underground"))
-                    ?? map.Biome;
+
+                return undergroundBiome ?? (undergroundBiome = DefDatabase<BiomeDef>.GetNamedSilentFail("AB_Underground")) ?? map.Biome;
             }
-            // Sky inherits the surface biome by default (V1's skyBiomeInherit), because a
-            // plateau above a boreal forest should still feel boreal.
+
             if (ABMod.Settings != null && ABMod.Settings.skyBiomeInherit)
             {
-                return map.Biome;
+                return SurfaceBiomeUnder(map, bands, cell) ?? map.Biome;
             }
-            return skyBiome
-                ?? (skyBiome = DefDatabase<BiomeDef>.GetNamedSilentFail("AB_OpenSky"))
-                ?? map.Biome;
+
+            return skyBiome ?? (skyBiome = DefDatabase<BiomeDef>.GetNamedSilentFail("AB_OpenSky")) ?? map.Biome;
         }
 
         /// <summary>Temperature offset for a level, preferring the colony's own snapshot.
@@ -267,6 +268,22 @@ namespace AsAboveSoBelow
         {
             return WindFactorForLevel(null, level);
         }
+        private static BiomeDef SurfaceBiomeUnder(Map map, ABBandMap bands, IntVec3 cell)
+        {
+            IntVec3 c = bands.Translate(cell, bands.surfaceBand);
+            if (bands.InGutter(c))
+            {
+                c.z = bands.RectOfBand(bands.surfaceBand).maxZ;
+            }
+
+            if (!c.InBounds(map))
+            {
+                return null;
+            }
+
+            return map.BiomeAt(c);
+        }
+
     }
 
     // REMOVED 2026-07-28: Patch_WildPlantSpawner_ABBandDensity.
