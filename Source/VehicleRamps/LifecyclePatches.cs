@@ -48,6 +48,7 @@ public static class LifecyclePatches
         RampRegistry.Remove(map);
         RampClips.ClearMap(map);
         CrossingPatch.ClearWaits(map);
+        RampTraffic.ClearMap(map);
     }
 
     public static void AllMapsClearing()
@@ -55,6 +56,7 @@ public static class LifecyclePatches
         RampRegistry.Clear();
         RampClips.ClearAll();
         CrossingPatch.ClearAllWaits();
+        RampTraffic.ClearAll();
     }
 
     /// <summary>
@@ -65,6 +67,7 @@ public static class LifecyclePatches
     public static void PatherTicked(VehiclePathFollower __instance)
     {
         CrossingPatch.UpdateWait(__instance);
+        RampTraffic.PatherTicked(__instance);
         if (!RampClips.AnyActive || !RampClips.TryGet(__instance.vehicle, out var clip))
         {
             return;
@@ -94,6 +97,7 @@ public static class LifecyclePatches
     {
         RampClips.Clear(__instance);
         CrossingPatch.ClearWait(__instance);
+        RampTraffic.Forget(__instance);
     }
 
     /// <summary>

@@ -212,8 +212,16 @@ public static class StartupBinding
         MemberBinding.RequireField(follower, "nextCell", typeof(IntVec3));
         MemberBinding.RequireField(typeof(VehiclePawn), "beached", typeof(bool));
         MemberBinding.RequireProperty(follower, "Waiting", typeof(bool), false);
+        MemberBinding.RequireProperty(follower, "Moving", typeof(bool), false);
+        // RampTraffic builds Vehicle Framework's own footprint for a cell and rotation.
+        MemberBinding.RequireConstructor(typeof(CoreLib.EntityRect), typeof(int), typeof(int), typeof(int),
+            typeof(int), typeof(CoreLib.Orientation));
+        MemberBinding.RequireConstructor(typeof(CoreLib.Orientation), typeof(int));
+        MemberBinding.RequireMethod(typeof(CoreLib.EntityRect), "GetEnumerator", Type.EmptyTypes,
+            typeof(CoreLib.EntityRect.Enumerator));
         MemberBinding.RequireProperty(follower, "RequestStatus", typeof(VehiclePathFollower.PathRequestStatus), false);
         MemberBinding.RequireMethod(typeof(VehiclePath), "Peek", new[] { typeof(int) }, typeof(IntVec3));
+        MemberBinding.RequireProperty(typeof(VehiclePath), "LastNode", typeof(IntVec3), false);
         MemberBinding.RequireMethod(typeof(VehiclePath), "ConsumeNextNode", Type.EmptyTypes, typeof(IntVec3));
         MemberBinding.RequireProperty(typeof(Path), "NodesLeft", typeof(int), false);
 

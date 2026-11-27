@@ -7,6 +7,14 @@ destination on another floor. Leave room for its full footprint and length at
 both mouths. A forbidden ramp closes the crossing. The AASB transit animation
 setting also controls vehicle ramp animation.
 
+Vehicles use a ramp one at a time. A vehicle about to drive into a ramp's mouth
+area waits one step short while another vehicle is using the ramp, in either
+direction. It drives on once that vehicle has crossed and left both mouth
+areas. Waiting vehicles go in arrival order. A vehicle that is already inside a
+mouth area when the ramp is in use waits where it stands. If it stands where
+the other vehicle must land, that vehicle gives up its order as before and the
+waiting vehicle then goes.
+
 The fork bundles the 0.4.0 Ramp code and textures from RimWorld-Patches at
 `2aca85189069828ce5a54b48fae21f3f99f5f425`. The MIT notice and texture credit
 are in [the bundled license](../1.7/VehicleRamps/LICENSE). Vehicle support
@@ -57,3 +65,15 @@ multi-floor routing, reachability, animation, and save/reload.
   `fixture-state.xml` sidecar. Run the same case with the bundled configuration
   and pass `--fixture /absolute/path/to/candidate.rws`. The test finds the
   original ramp buildings by saved ID and repeats the pawn orders.
+- Append [VehicleRampTraffic.cs](../Tests/VehicleRampTraffic.cs) the same way
+  for the ramp traffic cases on the two-floor fixture. Its cases drop the
+  standalone package from `RequiredPackages`.
+
+| Case | Checks |
+| --- | --- |
+| `ramps.traffic-pair` | Two MRAPs ordered on the same tick both climb. No refusals, never two vehicles in the mouth areas of one ramp, no claim left. Whether one has to wait depends on path timing |
+| `ramps.traffic-trio` | Two MRAPs and a CV90 ordered together climb in turn |
+| `ramps.traffic-opposed` | One vehicle climbs while another descends, ordered on the same tick. Both swap floors |
+| `ramps.traffic-opposed-queued` | The descent is ordered once the climber holds the ramp, and a test-only patch pauses the climber briefly so the descender arrives while the ramp is in use. The descender waits outside the upper mouth, the climber crosses out past it and the descender follows |
+| `ramps.traffic-waiter-cancel` | Undrafting the vehicle waiting in line drops it from the line within a few ticks. The holder crosses and nothing is left behind |
+| `ramps.traffic-cleanup` | Undrafting the vehicle holding the ramp hands it to the waiting vehicle, which crosses |

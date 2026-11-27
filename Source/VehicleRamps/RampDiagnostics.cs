@@ -65,6 +65,18 @@ public static class RampDiagnostics
     public static long ClipsCancelled;
     public static long HeldTicks;
 
+    /// <summary>Ramp claims taken (<see cref="RampTraffic"/>).</summary>
+    public static long ClaimsGranted;
+
+    /// <summary>Vehicles that stopped to wait in line for a ramp.</summary>
+    public static long ClaimHolds;
+
+    /// <summary>Ticks vehicles spent waiting in line for a ramp.</summary>
+    public static long ClaimHeldTicks;
+
+    /// <summary>Claims taken back from a holder that made no progress.</summary>
+    public static long ClaimsRevoked;
+
     /// <summary>Nodes popped by the most recent path job that ran on a map with ramps.</summary>
     public static long LastJobNodes;
 
@@ -110,6 +122,7 @@ public static class RampDiagnostics
         ClipsStarted = ClipsCancelled = HeldTicks = 0;
         ReachRegionsVisited = ReachPortalLinks = ReachEntryRejected = ReachExitRejected = ReachExitNoRegion = 0;
         ReachChainCalls = ReachChainLaneChecks = OccupancyWaitsStarted = 0;
+        ClaimsGranted = ClaimHolds = ClaimHeldTicks = ClaimsRevoked = 0;
         lock (s_events)
         {
             s_events.Clear();

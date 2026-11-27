@@ -74,6 +74,20 @@ public static class MemberBinding
             + string.Join(", ", parameters.Select(p => p.Name)) + ")");
     }
 
+    /// <summary>Requires an instance constructor with exact parameters.</summary>
+    public static ConstructorInfo RequireConstructor(Type owner, params Type[] parameters)
+    {
+        var constructor = owner.GetConstructor(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance,
+            null, parameters, null);
+        if (constructor == null)
+        {
+            throw new InvalidOperationException("missing constructor " + owner.FullName + "("
+                + string.Join(", ", parameters.Select(p => p.Name)) + ")");
+        }
+
+        return constructor;
+    }
+
     public static PropertyInfo RequireProperty(Type owner, string name, Type propertyType, bool needsSetter)
     {
         for (var current = owner; current != null; current = current.BaseType)

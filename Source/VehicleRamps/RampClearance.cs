@@ -42,12 +42,18 @@ internal static class RampClearance
         return true;
     }
 
-    internal static bool IsOccupied(Map map, CellRect lane, VehiclePawn crossingVehicle)
+    /// <summary>
+    /// True when a pawn or vehicle other than the crossing vehicle is in the lane. Vehicles for which
+    /// <paramref name="ignore"/> returns true are skipped.
+    /// </summary>
+    internal static bool IsOccupied(Map map, CellRect lane, VehiclePawn crossingVehicle,
+        Func<VehiclePawn, bool> ignore = null)
     {
         foreach (var cell in lane)
         {
             // VF's diagonal footprint can claim cells beyond the pawn entries in RimWorld's thing grid.
-            if (PathingHelper.AnyVehicleBlockingPathAt(cell, crossingVehicle) != null)
+            var claimant = PathingHelper.AnyVehicleBlockingPathAt(cell, crossingVehicle);
+            if (claimant != null && (ignore == null || !ignore(claimant)))
             {
                 return true;
             }
@@ -55,7 +61,8 @@ internal static class RampClearance
             var things = map.thingGrid.ThingsListAtFast(cell);
             for (var i = 0; i < things.Count; i++)
             {
-                if (things[i] is Pawn other && other != crossingVehicle)
+                if (things[i] is Pawn other && other != crossingVehicle
+                    && (ignore == null || other is not VehiclePawn vehicle || !ignore(vehicle)))
                 {
                     return true;
                 }
