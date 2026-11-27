@@ -34,8 +34,6 @@ namespace AsAboveSoBelow
         }
     }
 
-    /// <summary>See above: the one TerrainGrid writer that bypasses
-    /// DoTerrainChangedEffects. Gravship moves rewrite terrain wholesale.</summary>
     /// <summary>
     /// TryResolveVisibleBelow stops on a level whose see-through cell holds a covering
     /// building (ABBands.CoveredAt, #21), so its per-terrain-version cache must also turn
@@ -52,38 +50,17 @@ namespace AsAboveSoBelow
                 return;
             }
             ABBandMap bands = ABBands.CompOf(map);
-            bool bumped = false;
             foreach (IntVec3 c in ed.OccupiedRect())
             {
                 if (!c.InBounds(map) || !ABBands.ShowsBelow(map.terrainGrid.TerrainAt(c)))
                 {
                     continue;
                 }
-                if (!bumped)
-                {
-                    bands?.DirtySeeBelowCache();
-                    bumped = true;
-                }
-                // Views from higher levels now stop (or no longer stop) on this cell, which
-                // can move a lower multi-cell thing's print anchor (IsPrintAnchor) into a
-                // NEIGHBOURING section. The upward mirror only dirties the cell's own
-                // section, so the section that gains the anchor kept its old mesh and the
-                // thing vanished until something else rebuilt it. Dirty the adjacent
-                // sections on every level above; this only runs when a covering building
-                // appears on or leaves a see-through cell.
-                if (bands == null || !bands.Banded || map.mapDrawer == null)
-                {
-                    continue;
-                }
-                for (int b = bands.BandOf(c) + 1; b < bands.bandCount; b++)
-                {
-                    IntVec3 above = bands.Translate(c, b);
-                    if (above.InBounds(map) && !bands.InGutter(above))
-                    {
-                        map.mapDrawer.MapMeshDirty(above, (ulong)ABDefOf.AB_BelowThings,
-                            regenAdjacentCells: false, regenAdjacentSections: true);
-                    }
-                }
+                // Mesh invalidation for lower multi-cell things whose print anchor this
+                // moves is the upward mirror's job (DirtyMultiCellFootprints): spawning or
+                // removing the building dirties this cell, and the mirror sees the column.
+                bands?.DirtySeeBelowCache();
+                return;
             }
         }
 
@@ -102,6 +79,8 @@ namespace AsAboveSoBelow
         }
     }
 
+    /// <summary>See above: the one TerrainGrid writer that bypasses
+    /// DoTerrainChangedEffects. Gravship moves rewrite terrain wholesale.</summary>
     [HarmonyPatch(typeof(TerrainGrid), nameof(TerrainGrid.RemoveGravshipTerrainUnsafe))]
     public static class Patch_TerrainGrid_ABSeeBelowDirtyGravship
     {

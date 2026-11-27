@@ -619,6 +619,17 @@ public sealed class StackedWalls : WallCase
             solarN != null && solarN.OccupiedRect() == CellRect.FromLimits(84, 44, 87, 47),
             new { rect = solarN?.OccupiedRect().ToString() });
 
+        // P: a 4x4 solar generator (x 101..104, z 33..36) across the section boundary at x 101|102. Live, its first
+        // cell gets a roof on level 0, which turns the viewing level's cell above it into rooftop and moves the anchor
+        // into the next section. (Regression check: the roof change is also mirrored up from level 0, so this passes
+        // with either footprint invalidation; it guards the case, it does not isolate the viewing-level path.)
+        OpenGround(map, CellRect.FromLimits(99, 31, 106, 37));
+        Build(map, DefDatabase<ThingDef>.GetNamed("SolarGenerator"), new IntVec3(102, 0, 34), null);
+        var solarP = new IntVec3(102, 0, 34).GetFirstBuilding(map);
+        c.Check("solar generator P covers x 101..104, z 33..36",
+            solarP != null && solarP.OccupiedRect() == CellRect.FromLimits(101, 33, 104, 36),
+            new { rect = solarP?.OccupiedRect().ToString() });
+
         var down = ThingMaker.MakeThing(DefDatabase<ThingDef>.GetNamed("AB2_StairsDown"), ThingDefOf.WoodLog);
         down.SetFaction(Faction.OfPlayer);
         _stairs = (Building_ABStairs2)GenSpawn.Spawn(down, StairCell, map, Rot4.North);
@@ -710,6 +721,17 @@ public sealed class StackedWalls : WallCase
             Shot("n-upper-after-fog");
         });
         Step(() => ReadColours("n-upper-after-fog"));
+        Step(() =>
+        {
+            c.Map.roofGrid.SetRoof(new IntVec3(101, 0, 33), RoofDefOf.RoofConstructed);
+            View(new IntVec3(103, 0, 35 + Up), 6f);
+        });
+        Step(() =>
+        {
+            Mark("p-solar", new Vector3(103.5f, 0f, 35.5f + Up));
+            Shot("p-upper-after-roof");
+        });
+        Step(() => ReadColours("p-upper-after-roof"));
         Step(() => View(new IntVec3(77, 0, 40 + Up), 6f));
         Step(() => Shot("i-upper-fire-smoke-turbine"));
         Step(() => View(new IntVec3(77, 0, 40), 6f));
@@ -729,6 +751,8 @@ public sealed class StackedWalls : WallCase
             "n-upper-before-fog", "n-solar", 0.9f);
         ExpectCool("a big building stays drawn when fogging its corner moves its anchor into the next section",
             "n-upper-after-fog", "n-solar-after", 0.9f);
+        ExpectCool("a big building stays drawn when a roof is added over its corner",
+            "p-upper-after-roof", "p-solar", 0.9f);
     }
 
     protected override void EachFrame(Context c)
@@ -749,7 +773,7 @@ public sealed class StackedWalls : WallCase
 
     protected override void Verify(Context c)
     {
-        c.Check("screenshots taken", Shots.Count == 11, new { shots = Shots });
+        c.Check("screenshots taken", Shots.Count == 12, new { shots = Shots });
         _legacyBeforeSave = c.Map.terrainGrid.TerrainAt(Legacy)?.defName;
         c.Event("legacy-before-save", new { terrain = _legacyBeforeSave });
     }

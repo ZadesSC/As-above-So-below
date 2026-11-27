@@ -843,9 +843,12 @@ namespace AsAboveSoBelow
 
         private static bool mirroring;
 
-        /// <summary>True when the cell, or the cell under it on any lower level, holds a
-        /// thing bigger than one cell. A few thing-list reads per mirrored cell.</summary>
-        private static bool MultiCellThingInColumn(Map map, ABBandMap bands, IntVec3 loc, int fromBand)
+        /// <summary>For each thing bigger than one cell at <paramref name="loc"/> or under it
+        /// on a lower level, dirty every section its footprint covers on each level above the
+        /// thing. A few thing-list reads per call; dirties nothing for ordinary columns.
+        /// Called with <c>mirroring</c> set, so these MapMeshDirty calls do not recurse.</summary>
+        private static void DirtyMultiCellFootprints(Map map, ABBandMap bands, IntVec3 loc, int fromBand,
+            ulong flag)
         {
             for (int b = fromBand; b >= 0; b--)
             {
@@ -857,14 +860,39 @@ namespace AsAboveSoBelow
                 System.Collections.Generic.List<Thing> things = map.thingGrid.ThingsListAtFast(c);
                 for (int i = 0; i < things.Count; i++)
                 {
-                    IntVec2 size = things[i].def.size;
-                    if (size.x > 1 || size.z > 1)
+                    Thing t = things[i];
+                    if (t.def.size.x <= 1 && t.def.size.z <= 1)
                     {
-                        return true;
+                        continue;
+                    }
+                    CellRect rect = t.OccupiedRect();
+                    for (int up = b + 1; up < bands.bandCount; up++)
+                    {
+                        int dz = (up - b) * bands.Slot;
+                        // One dirty per section: step by the section size, plus the far edge.
+                        for (int z = rect.minZ; ; z = System.Math.Min(z + Section.Size, rect.maxZ))
+                        {
+                            for (int x = rect.minX; ; x = System.Math.Min(x + Section.Size, rect.maxX))
+                            {
+                                IntVec3 above = new IntVec3(x, 0, z + dz);
+                                if (above.InBounds(map))
+                                {
+                                    map.mapDrawer.MapMeshDirty(above, flag, regenAdjacentCells: false,
+                                        regenAdjacentSections: false);
+                                }
+                                if (x == rect.maxX)
+                                {
+                                    break;
+                                }
+                            }
+                            if (z == rect.maxZ)
+                            {
+                                break;
+                            }
+                        }
                     }
                 }
             }
-            return false;
         }
 
         private static void Postfix(MapDrawer __instance, IntVec3 loc, ulong dirtyFlags)
@@ -918,15 +946,18 @@ namespace AsAboveSoBelow
                 // "mineables disappear on floor 2" class), so ADD THE FLAG when adding a
                 // layer - the mirror is no longer flag-agnostic.
                 ulong mirrorFlag = (ulong)ABDefOf.AB_BelowThings;
-                // A change in this column (fog, terrain, a building) can move the print
-                // anchor of a multi-cell thing at or under it (IsPrintAnchor) to another
-                // footprint cell, possibly in a NEIGHBOURING section - which then keeps its
-                // old mesh and the thing vanishes until something else rebuilds it. Only
-                // then are adjacent sections dirtied too; ordinary columns stay one section.
-                bool adjacent = MultiCellThingInColumn(map, bands, loc, fromBand);
                 mirroring = true;
                 try
                 {
+                    // A change in this column (fog, terrain, a building) can move the print
+                    // anchor of a multi-cell thing at or under it (IsPrintAnchor) to another
+                    // footprint cell, possibly in another section - which then keeps its old
+                    // mesh and the thing vanishes until something else rebuilds it. Such a
+                    // thing gets every section its footprint covers dirtied, on every level
+                    // that can look down at it - including THIS level when the thing is below
+                    // it (a terrain change on the viewing level moves anchors too). Exactly
+                    // the sections it covers, not a 3x3 block, and only for those columns.
+                    DirtyMultiCellFootprints(map, bands, loc, fromBand, mirrorFlag);
                     for (int b = fromBand + 1; b < bands.bandCount; b++)
                     {
                         IntVec3 above = bands.Translate(loc, b);
@@ -934,15 +965,7 @@ namespace AsAboveSoBelow
                         {
                             break; // nothing above a gutter column can look down it
                         }
-                        if (adjacent)
-                        {
-                            map.mapDrawer.MapMeshDirty(above, mirrorFlag, regenAdjacentCells: false,
-                                regenAdjacentSections: true);
-                        }
-                        else
-                        {
-                            map.mapDrawer.MapMeshDirty(above, mirrorFlag);
-                        }
+                        map.mapDrawer.MapMeshDirty(above, mirrorFlag);
                         steps++;
                         // ⚠ THE ASCENT RULE - the inverse of ABBands.TryResolveVisibleBelow,
                         // and it was missing here while the descent rule was being enforced
