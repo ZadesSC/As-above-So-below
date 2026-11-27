@@ -256,9 +256,11 @@ namespace AsAboveSoBelow
         /// Drawing copes (SectionLayer_ABBelowV2 prints lower levels a hair under the viewing
         /// level), but pointing descended straight past the stacked wall: hover readouts,
         /// targeting and right-click orders all landed on the wall below. Kept out of
-        /// ShowsBelow and TryResolveVisibleBelow on purpose: those are cached per terrain
-        /// version and shared by every renderer, while this is asked only at the pointer
-        /// entry points, a few times per frame at most.
+        /// ShowsBelow on purpose: the START cell of a view keeps drawing the level below (the
+        /// stacked wall is drawn over it), so only pointing asks about the start cell.
+        /// TryResolveVisibleBelow does use it for the levels it passes THROUGH, which is why
+        /// building or removing a covering building on a see-through cell bumps the
+        /// see-below cache (Patch_EdificeGrid_ABSeeBelowDirty).
         /// </summary>
         public static bool CoveredAt(Map map, IntVec3 cell)
         {
@@ -362,10 +364,12 @@ namespace AsAboveSoBelow
                 }
                 cur = next;
                 drop += slot;
-                if (!ShowsBelow(map.terrainGrid.TerrainAt(cur)))
+                if (!ShowsBelow(map.terrainGrid.TerrainAt(cur)) || CoveredAt(map, cur))
                 {
                     below = cur;
-                    return true; // an opaque floor: this is what is seen
+                    // An opaque floor, or a wall stacked on a wall top on this level (#21):
+                    // either way this level is what is seen, not the one under it.
+                    return true;
                 }
                 if (bands.BandOf(cur) <= 0)
                 {

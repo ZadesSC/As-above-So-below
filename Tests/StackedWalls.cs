@@ -29,11 +29,15 @@ using Verse.AI.Group;
 // roofed concrete with steel columns at 14+8k; floor 1 is AB_RoofSurface.
 public class WallFixture : FixtureProvider
 {
+    protected virtual int Floors => 2;
+
+    protected virtual string ContractId => "aasb-stacked-walls";
+
     public override FixtureContract Contract => new FixtureContract
     {
-        Id = "aasb-stacked-walls",
+        Id = ContractId,
         Version = "1",
-        Intent = "2-floor AASB arena for stacked wall rendering",
+        Intent = Floors + "-floor AASB arena for stacked wall rendering",
         HorizonTicks = 16000,
         Capabilities = new[] { "generated-map", "environment", "save-reload" },
         Interventions = new[]
@@ -43,7 +47,10 @@ public class WallFixture : FixtureProvider
             "ambient-wildlife-disabled", "setup-pawn-world-retirement", "unused-generated-map-retirement",
             "roof-sync-suspended-during-layout", "camera-moves-for-screenshots",
         },
-        Invariants = new Dictionary<string, double> { { "mapWidth", 128 }, { "bands", 2 }, { "outdoorC", 21 } },
+        Invariants = new Dictionary<string, double>
+        {
+            { "mapWidth", 64 * Floors }, { "bands", Floors }, { "outdoorC", 21 },
+        },
     };
 
     public override void Setup(Context c)
@@ -56,7 +63,7 @@ public class WallFixture : FixtureProvider
         multiLevel.SetValue(settings, false);
         try
         {
-            new MapRecipe { Size = 128, Biome = "Desert", Weather = "Clear", Temperature = 21 }.Generate(c);
+            new MapRecipe { Size = 64 * Floors, Biome = "Desert", Weather = "Clear", Temperature = 21 }.Generate(c);
         }
         finally
         {
@@ -84,7 +91,7 @@ public class WallFixture : FixtureProvider
         }
 
         var bands = ABBands.CompOf(c.Map);
-        AccessTools.Method(typeof(ABBandMap), "Setup").Invoke(bands, new object[] { 2, 62, 0 });
+        AccessTools.Method(typeof(ABBandMap), "Setup").Invoke(bands, new object[] { Floors, 62, 0 });
         AccessTools.Method(AccessTools.TypeByName("AsAboveSoBelow.ABBandedGeneration"), "Carve").Invoke(null,
             new object[] { c.Map, bands });
         AccessTools.Method(typeof(ABBandMap), "FinalizeInit").Invoke(bands, null);
@@ -113,7 +120,8 @@ public class WallFixture : FixtureProvider
                     }
                 }
 
-                c.Map.roofGrid.SetRoof(cell, cell.z < 64 ? RoofDefOf.RoofConstructed : null);
+                // Every floor but the top one is roofed: AASB keeps an upper floor's surface only above a roof.
+                c.Map.roofGrid.SetRoof(cell, cell.z < 64 * (Floors - 1) ? RoofDefOf.RoofConstructed : null);
                 c.Map.terrainGrid.SetTerrain(cell, DefDatabase<TerrainDef>.GetNamed(cell.z < 64
                     ? "Concrete" : "AB_RoofSurface"));
                 c.Map.fogGrid.Unfog(cell);
@@ -140,7 +148,7 @@ public class WallFixture : FixtureProvider
 
     public override void Validate(Context c, string stage)
     {
-        var pass = c.Map.Size.x == 128 && ABBands.BandCount(c.Map) == 2
+        var pass = c.Map.Size.x == 64 * Floors && ABBands.BandCount(c.Map) == Floors
             && Math.Abs(c.Map.mapTemperature.OutdoorTemp - 21) < .01;
         c.Check("fixture " + stage, pass);
         c.Event("fixture-validation", new { stage, supported = true, passed = pass, invariants = Contract.Invariants });
@@ -156,6 +164,15 @@ public class WallFixture : FixtureProvider
     }
 }
 
+/// <summary>Three floors (192 x 192 map); floors 0 and 1 are roofed. Needs its own host config, because the fixture
+/// contract differs.</summary>
+public sealed class ThreeFloorWallFixture : WallFixture
+{
+    protected override int Floors => 3;
+
+    protected override string ContractId => "aasb-stacked-walls-3f";
+}
+
 /// <summary>Shared frame loop: each step is an action; a step may request a screenshot, which is captured after a
 /// short settle and then waited on until the file exists.</summary>
 public abstract class WallCase : Rwtf.Scenario
@@ -167,12 +184,93 @@ public abstract class WallCase : Rwtf.Scenario
     private int _wait;
     private string _pendingShot;
     private string _writing;
+    private string _writingName;
     private int _writeFrames;
     private bool _priorPause;
 
     protected Context Ctx { get; private set; }
 
     protected List<string> Shots { get; } = new List<string>();
+
+    protected List<string> MissingShots { get; } = new List<string>();
+
+    private readonly Dictionary<string, Vector3> _marks = new Dictionary<string, Vector3>();
+    private readonly List<(string label, string shot, string warm, string reference, float minGap)> _colourChecks =
+        new List<(string, string, string, string, float)>();
+    private readonly List<(string label, string shot, string warm, float minRatio)> _warmChecks =
+        new List<(string, string, string, float)>();
+    private readonly Dictionary<string, string> _colourResults = new Dictionary<string, string>();
+
+    /// <summary>Remember where a world point lands on screen for the next screenshot.</summary>
+    protected void Mark(string name, Vector3 world) => _marks[name] = Find.Camera.WorldToScreenPoint(world);
+
+    /// <summary>After <paramref name="shot"/> is written, require the sample at mark <paramref name="warm"/> to read
+    /// as wood: red over blue at least <paramref name="minGap"/> above the sample at <paramref name="reference"/>.
+    /// Ratios rather than levels, so the check does not depend on lighting.</summary>
+    protected void ExpectWoodAgainst(string label, string shot, string warm, string reference, float minGap = .4f) =>
+        _colourChecks.Add((label, shot, warm, reference, minGap));
+
+    /// <summary>Require the sample at mark <paramref name="warm"/> to read as wood on its own (red/blue at least
+    /// <paramref name="minRatio"/>; wood is about 2.4 at noon, granite and steel about 1.1).</summary>
+    protected void ExpectWood(string label, string shot, string warm, float minRatio = 1.6f) =>
+        _warmChecks.Add((label, shot, warm, minRatio));
+
+    protected void ReadColours(string shot)
+    {
+        var path = ShotPath(shot);
+        if (!File.Exists(path))
+        {
+            return;
+        }
+
+        var image = new Texture2D(2, 2);
+        try
+        {
+            if (!image.LoadImage(File.ReadAllBytes(path)))
+            {
+                return;
+            }
+
+            float Ratio(string mark)
+            {
+                var col = Sample(image, _marks[mark], 2);
+                return col.r / Mathf.Max(col.b, .01f);
+            }
+
+            foreach (var check in _colourChecks.Where(x => x.shot == shot))
+            {
+                var warm = Ratio(check.warm);
+                var reference = Ratio(check.reference);
+                _colourResults[check.label] = warm - reference > check.minGap
+                    ? "ok" : $"{check.warm} {warm:F2} vs {check.reference} {reference:F2}";
+                Ctx.Event("colours", new { check.label, warm, reference });
+            }
+
+            foreach (var check in _warmChecks.Where(x => x.shot == shot))
+            {
+                var warm = Ratio(check.warm);
+                _colourResults[check.label] = warm >= check.minRatio ? "ok" : $"{check.warm} {warm:F2}";
+                Ctx.Event("colours", new { check.label, warm });
+            }
+        }
+        finally
+        {
+            UnityEngine.Object.Destroy(image);
+        }
+    }
+
+    protected void CheckColours(Context c)
+    {
+        foreach (var label in _colourChecks.Select(x => x.label).Concat(_warmChecks.Select(x => x.label)))
+        {
+            c.Check(label, _colourResults.TryGetValue(label, out var r) && r == "ok",
+                new { result = _colourResults.TryGetValue(label, out var v) ? v : "screenshot missing" });
+        }
+    }
+
+    /// <summary>Noon, so colour checks read lit walls whatever the generated start hour was.</summary>
+    protected static void SetNoon(Map map) => Find.TickManager.gameStartAbsTick +=
+        ((12 - GenLocalDate.HourOfDay(map) + 24) % 24) * GenDate.TicksPerHour;
 
     public override string EvidenceLevel => "assigned-job";
 
@@ -251,10 +349,16 @@ public abstract class WallCase : Rwtf.Scenario
         if (_writing != null)
         {
             // ScreenCapture writes at the end of a later frame; wait for the file before moving on.
-            if (File.Exists(_writing) || ++_writeFrames > 120)
+            if (File.Exists(_writing))
             {
+                Shots.Add(_writingName);
                 _writing = null;
                 _wait = 5;
+            }
+            else if (++_writeFrames > 120)
+            {
+                MissingShots.Add(_writingName);
+                _writing = null;
             }
 
             return false;
@@ -266,8 +370,8 @@ public abstract class WallCase : Rwtf.Scenario
             {
                 var path = ShotPath(_pendingShot);
                 ScreenCapture.CaptureScreenshot(path);
-                Shots.Add(_pendingShot);
                 c.Event("screenshot", new { path, tick = c.Tick });
+                _writingName = _pendingShot;
                 _writing = path;
                 _writeFrames = 0;
                 _pendingShot = null;
@@ -294,6 +398,8 @@ public abstract class WallCase : Rwtf.Scenario
     public override void Assert(Context c)
     {
         c.Check("all steps ran", _step >= _steps.Count, new { step = _step, of = _steps.Count });
+        c.Check("every screenshot was written", MissingShots.Count == 0, new { missing = MissingShots });
+        CheckColours(c);
         Verify(c);
     }
 
@@ -329,9 +435,8 @@ public sealed class StackedWalls : WallCase
     private bool _effects;
     private readonly List<IntVec3> _stacked = new List<IntVec3>();
     private readonly List<IntVec3> _floored = new List<IntVec3>();
-    private Vector3 _woodScreen;
-    private Vector3 _graniteScreen;
-    private string _colourResult;
+    private static readonly IntVec3 Legacy = new IntVec3(108, 0, 25 + Up);
+    private string _legacyBeforeSave;
 
     public override string Id => "walls.stacked";
 
@@ -342,6 +447,10 @@ public sealed class StackedWalls : WallCase
     // D x 71..77 z 23..29: upper steel ring; only its west half (x <= 74) stands on lower walls, the east half
     //   on roofed concrete. The ring must read as one connected ring.
     // E x 87..93 z 25: lower granite run; upper WOOD walls only on x 87..90. The stacked cells must look like wood.
+    // K x 96..97 z 24..25: lower 2x2 granite block; one wood wall stacked on its corner (97,25). The block's corner
+    //   filler (drawn one AltInc above the wall face) must stay under the wood wall.
+    // J x 103..109 z 25: lower steel run; wood floor on the empty wall tops x 103..106, steel stacked on x 107..109.
+    //   (108,89) is then forced to open air with sync suspended, as a save from before the load fix would hold.
     // G x 20..34 z 33..48 (open ground): lower granite run z 40 x 22..32, wood stacked on x 22..28; deep snow below,
     //   an oak at (27,39) and a torch at (31,41).
     // H x 50..64 z 33..48 (open ground): lower steel run z 40 x 52..62, wood stacked on all; lower cells north of
@@ -351,9 +460,7 @@ public sealed class StackedWalls : WallCase
     protected override void Arrange(Context c)
     {
         var map = c.Map;
-        // Noon, so the colour check below reads lit walls whatever the generated start hour was.
-        Find.TickManager.gameStartAbsTick +=
-            ((12 - GenLocalDate.HourOfDay(map) + 24) % 24) * GenDate.TicksPerHour;
+        SetNoon(map);
         var granite = DefDatabase<ThingDef>.GetNamed("BlocksGranite");
         var steel = ThingDefOf.Steel;
         var wood = ThingDefOf.WoodLog;
@@ -393,8 +500,15 @@ public sealed class StackedWalls : WallCase
             }
         }
 
-        // J x 103..109 z 25: lower steel run; wood floor laid on the empty wall tops x 103..106, steel stacked on
-        //   x 107..109. Both must survive a reload unchanged (load used to strip them to open air).
+        foreach (var cell in CellRect.FromLimits(96, 24, 97, 25).Cells)
+        {
+            map.roofGrid.SetRoof(cell, null);
+            Wall(map, cell, granite);
+        }
+
+        Wall(map, new IntVec3(97, 0, 25 + Up), wood);
+        _stacked.Add(new IntVec3(97, 0, 25 + Up));
+
         var plank = DefDatabase<TerrainDef>.GetNamed("WoodPlankFloor");
         for (var x = 103; x <= 109; x++)
         {
@@ -462,28 +576,66 @@ public sealed class StackedWalls : WallCase
             cell.GetEdifice(map)?.def == ThingDefOf.Wall && map.terrainGrid.TerrainAt(cell) == ABDefOf.AB_WallTop
             && ABBands.CoveredAt(map, cell)), new { cells = _stacked.Count });
 
-        Step(() => View(new IntVec3(90, 0, 25 + Up), 6f));
+        // Last: a stacked wall on open air, as saved by builds before the load fix. Written with sync suspended so
+        // nothing repairs it before the runner's save; AfterReload expects the wall top back.
+        var sync = AccessTools.Field(typeof(ABSkySync), "Suspended");
+        sync.SetValue(null, true);
+        try
+        {
+            map.terrainGrid.SetTerrain(Legacy, ABDefOf.AB_OpenAir);
+        }
+        finally
+        {
+            sync.SetValue(null, false);
+        }
+
+        _stacked.Remove(Legacy);
+        c.Check("legacy stacked wall set up on open air", map.terrainGrid.TerrainAt(Legacy) == ABDefOf.AB_OpenAir
+            && Legacy.GetEdifice(map)?.def == ThingDefOf.Wall);
+
+        Step(() => View(new IntVec3(92, 0, 25 + Up), 6f));
         Step(() =>
         {
-            _woodScreen = Find.Camera.WorldToScreenPoint(new IntVec3(88, 0, 25 + Up).ToVector3Shifted());
-            _graniteScreen = Find.Camera.WorldToScreenPoint(new IntVec3(92, 0, 25 + Up).ToVector3Shifted());
-            Shot("e-upper");
+            Mark("e-wood", new IntVec3(88, 0, 25 + Up).ToVector3Shifted());
+            Mark("e-granite", new IntVec3(92, 0, 25 + Up).ToVector3Shifted());
+            Mark("k-corner", new Vector3(97.18f, 0f, 25.18f + Up));
+            Mark("k-granite", new IntVec3(96, 0, 24 + Up).ToVector3Shifted());
+            Shot("e-k-upper");
         });
-        Step(() => _colourResult = CompareColours(ShotPath("e-upper")));
-        Step(() => View(new IntVec3(90, 0, 25), 6f));
-        Step(() => Shot("e-lower"));
+        Step(() => ReadColours("e-k-upper"));
+        Step(() => View(new IntVec3(92, 0, 25), 6f));
+        Step(() => Shot("e-k-lower"));
         Step(() => View(new IntVec3(26, 0, 26 + Up)));
         Step(() => Shot("a-upper"));
         Step(() => View(new IntVec3(74, 0, 26 + Up)));
         Step(() => Shot("d-upper"));
         Step(() => View(new IntVec3(27, 0, 40 + Up), 6f));
-        Step(() => Shot("g-upper-snow-tree-torch"));
+        Step(() =>
+        {
+            Mark("g-wood", new IntVec3(24, 0, 40 + Up).ToVector3Shifted());
+            Mark("g-granite", new IntVec3(31, 0, 40 + Up).ToVector3Shifted());
+            Shot("g-upper-snow-tree-torch");
+        });
+        Step(() => ReadColours("g-upper-snow-tree-torch"));
         Step(() => View(new IntVec3(57, 0, 40 + Up), 6f));
-        Step(() => Shot("h-upper-fog"));
+        Step(() =>
+        {
+            Mark("h-wood", new Vector3(55.5f, 0f, 40.3f + Up));
+            Shot("h-upper-fog");
+        });
+        Step(() => ReadColours("h-upper-fog"));
         Step(() => View(new IntVec3(77, 0, 40 + Up), 6f));
         Step(() => Shot("i-upper-fire-smoke-turbine"));
         Step(() => View(new IntVec3(77, 0, 40), 6f));
         Step(() => Shot("i-lower"));
+
+        ExpectWoodAgainst("stacked wood wall is drawn as wood, not as the granite wall below it", "e-k-upper",
+            "e-wood", "e-granite");
+        ExpectWoodAgainst("a lower block's corner filler stays under the wall stacked on that corner", "e-k-upper",
+            "k-corner", "k-granite");
+        ExpectWoodAgainst("snow below does not cover a stacked wall", "g-upper-snow-tree-torch", "g-wood",
+            "g-granite");
+        ExpectWood("fog below does not cover the body of a stacked wall", "h-upper-fog", "h-wood");
     }
 
     protected override void EachFrame(Context c)
@@ -502,31 +654,11 @@ public sealed class StackedWalls : WallCase
         }
     }
 
-    /// <summary>Wood reads warm (red well above blue, about 1.9x); granite reads grey (about 0.9x). A stacked wood wall drawn under the
-    /// granite wall below it (the #21 bug) samples as grey.</summary>
-    private string CompareColours(string path)
-    {
-        var image = new Texture2D(2, 2);
-        if (!image.LoadImage(File.ReadAllBytes(path)))
-        {
-            return "unreadable";
-        }
-
-        var wood = Sample(image, _woodScreen);
-        var granite = Sample(image, _graniteScreen);
-        // Red over blue, so the test does not depend on how brightly the scene is lit.
-        var woodWarmth = wood.r / Mathf.Max(wood.b, .01f);
-        var graniteWarmth = granite.r / Mathf.Max(granite.b, .01f);
-        UnityEngine.Object.Destroy(image);
-        Ctx.Event("colours", new { wood = wood.ToString(), granite = granite.ToString(), woodWarmth, graniteWarmth });
-        return woodWarmth - graniteWarmth > .4f ? "ok" : $"wood {woodWarmth:F3} vs granite {graniteWarmth:F3}";
-    }
-
     protected override void Verify(Context c)
     {
-        c.Check("stacked wood wall is drawn as wood, not as the granite wall below it", _colourResult == "ok",
-            new { result = _colourResult });
         c.Check("screenshots taken", Shots.Count == 8, new { shots = Shots });
+        _legacyBeforeSave = c.Map.terrainGrid.TerrainAt(Legacy)?.defName;
+        c.Event("legacy-before-save", new { terrain = _legacyBeforeSave });
     }
 
     public override void AfterReload(Context c)
@@ -541,6 +673,9 @@ public sealed class StackedWalls : WallCase
                 || map.terrainGrid.UnderTerrainAt(cell) != ABDefOf.AB_WallTop)
             .Select(cell => cell + " " + map.terrainGrid.TerrainAt(cell)?.defName).ToList();
         c.Check("floors on empty wall tops survive reload", lostFloors.Count == 0, new { lostFloors });
+        c.Check("a stacked wall saved on open air gets its wall top back on load",
+            map.terrainGrid.TerrainAt(Legacy) == ABDefOf.AB_WallTop && Legacy.GetEdifice(map)?.def == ThingDefOf.Wall,
+            new { before = _legacyBeforeSave, after = map.terrainGrid.TerrainAt(Legacy)?.defName });
     }
 }
 
@@ -643,5 +778,86 @@ public sealed class StackedWallPointer : WallCase
         s_fakeMouse = null;
         _harmony?.UnpatchAll("aasb.test.walls.pointer");
         base.Teardown(c);
+    }
+}
+
+/// <summary>
+/// Three floors: lower granite run at level 0, wood stacked at level +1 on x 23..26 only, nothing at +2. Seen from
+/// +2, the empty wall top over a stacked wood wall must show (and point at) the wood wall, not look through it to
+/// the granite; over x 27..29 it still looks through to the granite two levels down. Needs a host config whose
+/// fixtureContract mirrors ThreeFloorWallFixture.
+/// </summary>
+public sealed class StackedWallsThreeFloors : WallCase
+{
+    private const int Up2 = 128;
+
+    public override string Id => "walls.three-floors";
+
+    public override string Intent => "Issue #21: a stacked wall hides the level under it from two floors up";
+
+    public override FixtureProvider Fixture => new ThreeFloorWallFixture();
+
+    protected override void Arrange(Context c)
+    {
+        var map = c.Map;
+        SetNoon(map);
+        var bands = ABBands.CompOf(map);
+        for (var x = 23; x <= 29; x++)
+        {
+            map.roofGrid.SetRoof(new IntVec3(x, 0, 25), null);
+            map.roofGrid.SetRoof(new IntVec3(x, 0, 25 + Up), null);
+            Wall(map, new IntVec3(x, 0, 25), DefDatabase<ThingDef>.GetNamed("BlocksGranite"));
+            if (x <= 26)
+            {
+                Wall(map, new IntVec3(x, 0, 25 + Up), ThingDefOf.WoodLog);
+            }
+        }
+
+        var wood = new IntVec3(24, 0, 25 + Up2);
+        var open = new IntVec3(28, 0, 25 + Up2);
+        c.Check("level +2 above a stacked wall is a wall top; above an empty wall top it is open air",
+            map.terrainGrid.TerrainAt(wood) == ABDefOf.AB_WallTop
+            && map.terrainGrid.TerrainAt(open) == ABDefOf.AB_OpenAir,
+            new { wood = map.terrainGrid.TerrainAt(wood)?.defName, open = map.terrainGrid.TerrainAt(open)?.defName });
+        var stopsAtWood = ABBands.TryResolveVisibleFrom(map, bands, wood, true, out var seenWood, out _);
+        c.Check("looking down from +2 stops at the stacked wall on +1",
+            stopsAtWood && seenWood == new IntVec3(24, 0, 25 + Up), new { seen = seenWood.ToString() });
+        var throughOpen = ABBands.TryResolveVisibleFrom(map, bands, open, true, out var seenOpen, out _);
+        c.Check("looking down from +2 over an empty wall top still reaches level 0",
+            throughOpen && seenOpen == new IntVec3(28, 0, 25), new { seen = seenOpen.ToString() });
+        c.Check("a click from +2 over a stacked wall lands on that wall",
+            ABBelowClickThrough.TryTranslate(map, wood.ToVector3Shifted(), out var clicked)
+            && IntVec3.FromVector3(clicked) == new IntVec3(24, 0, 25 + Up));
+
+        ABBandView.SetBand(map, 2, false);
+        var hiddenFromTop = ABBelowOverlays.TryLocalizeToView(map, new IntVec3(24, 0, 25).ToVector3Shifted(), out _);
+        var visibleFromTop = ABBelowOverlays.TryLocalizeToView(map, new IntVec3(28, 0, 25).ToVector3Shifted(), out _);
+        ABBandView.SetBand(map, 1, false);
+        var hiddenFromMiddle =
+            ABBelowOverlays.TryLocalizeToView(map, new IntVec3(24, 0, 25).ToVector3Shifted(), out _);
+        var visibleFromMiddle =
+            ABBelowOverlays.TryLocalizeToView(map, new IntVec3(28, 0, 25).ToVector3Shifted(), out _);
+        c.Check("selection brackets of a lower wall hidden under a stacked wall are not drawn on it",
+            !hiddenFromTop && !hiddenFromMiddle, new { hiddenFromTop, hiddenFromMiddle });
+        c.Check("selection brackets of a visible lower wall are still drawn",
+            visibleFromTop && visibleFromMiddle, new { visibleFromTop, visibleFromMiddle });
+
+        Step(() => View(new IntVec3(26, 0, 25 + Up2), 6f));
+        Step(() =>
+        {
+            Mark("wood", new IntVec3(24, 0, 25 + Up2).ToVector3Shifted());
+            Mark("granite", new IntVec3(28, 0, 25 + Up2).ToVector3Shifted());
+            Shot("top-floor");
+        });
+        Step(() => ReadColours("top-floor"));
+        Step(() => View(new IntVec3(26, 0, 25 + Up), 6f));
+        Step(() => Shot("middle-floor"));
+        ExpectWoodAgainst("seen from two floors up, the stacked wood wall shows, not the granite under it",
+            "top-floor", "wood", "granite");
+    }
+
+    protected override void Verify(Context c)
+    {
+        c.Check("screenshots taken", Shots.Count == 2, new { shots = Shots });
     }
 }

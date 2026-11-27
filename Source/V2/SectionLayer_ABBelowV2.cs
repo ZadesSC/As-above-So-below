@@ -760,8 +760,15 @@ namespace AsAboveSoBelow
         /// </summary>
         /// <summary>
         /// How far every print from a lower level sits below the same altitude on the
-        /// viewing level. Half of one AltInc: below its own layer's base, still far above
-        /// the next layer down (layers are ten AltInc apart).
+        /// viewing level: half an altitude layer (layers are ten AltInc apart).
+        ///
+        /// ⚠ NOT LESS THAN A FEW AltInc. Things print parts of themselves above their own
+        /// layer base - Graphic_LinkedCornerFiller puts each wall corner filler one full
+        /// AltInc above the wall face - so a nudge of half an AltInc left a lower 2x2 block's
+        /// corner filler drawn over a wall stacked on that corner. Half a layer clears every
+        /// such offset, and the lowest thing this layer prints (filth and conduits, a few
+        /// layers above TerrainScatter, where this layer prints lower-level terrain dressing)
+        /// still stays above the lower level's own terrain.
         ///
         /// Issue #21. A wall stacked on a lower wall stands on AB_WallTop, which shows the
         /// level below, so the lower wall is printed into the same cell at the same Building
@@ -770,7 +777,7 @@ namespace AsAboveSoBelow
         /// wall's. Shifting every print by one constant keeps the order among lower-level
         /// things exactly as it was and only breaks ties in favour of the viewing level.
         /// </summary>
-        internal const float BelowAltitudeNudge = Altitudes.AltInc * 0.5f;
+        internal const float BelowAltitudeNudge = Altitudes.AltInc * 5f;
 
         private void FinishNewVerts(int drop, Vector3 centre, float shrink)
         {

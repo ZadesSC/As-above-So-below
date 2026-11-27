@@ -309,10 +309,15 @@ namespace AsAboveSoBelow
             {
                 return; // generated summit, or a floor laid on ground that is not ours
             }
-            if (CarriesOwnStructure(map, target))
+            if (CarriesOwnStructure(map, target)
+                && !(current == ABDefOf.AB_OpenAir && target.GetEdifice(map) != null))
             {
                 return; // the band's own mass, a built structure, or a link footprint
             }
+            // ...except a building standing on AB_OpenAir, which can never be right: saves
+            // touched by the old load order (#21) hold stacked walls on open air. Re-deriving
+            // can only give it solid ground back (or leave it), never take any away, so the
+            // "never pull ground out from under a structure" rule is not at stake.
             TerrainDef want = Resolve(map, below);
             if (want == null || want == current)
             {
