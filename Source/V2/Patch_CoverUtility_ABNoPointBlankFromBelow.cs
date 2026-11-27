@@ -29,11 +29,7 @@ public static class Patch_CoverUtility_ABNoPointBlankFromBelow
             }
         }
 
-#if RIMWORLD_17
         ABCombatCover.pointBlankRuleArmed = num >= 1;
-#else
-        ABCombatCover.pointBlankRuleArmed = num == 1;
-#endif
         if (num != 1)
         {
             Log.Warning("[As above, So below] cover: expected exactly one shooter-to-cover distance read in CoverUtility.TryFindAdjustedCoverInCell, found " + num + ". " + ((num == 0) ? "Fire from a lower level keeps vanilla's point-blank cover discount." : "All of them now skip the discount for fire from below; report this."));

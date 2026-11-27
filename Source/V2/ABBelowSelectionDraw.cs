@@ -40,33 +40,6 @@ namespace AsAboveSoBelow
     /// The method is generic; the closed form actually used is resolved explicitly, since
     /// Harmony cannot infer which instantiation to patch.
     /// </summary>
-#if !RIMWORLD_17
-    [HarmonyPatch]
-    public static class Patch_SelectionBrackets_ABBelow
-    {
-        private static MethodBase TargetMethod()
-        {
-            MethodInfo open = AccessTools.Method(typeof(SelectionDrawerUtility),
-                "CalculateSelectionBracketPositionsWorld");
-            return open?.MakeGenericMethod(typeof(object));
-        }
-
-        private static void Prefix(ref Vector3 worldPos)
-        {
-            try
-            {
-                if (ABBelowSelectionDraw.TryLocalize(Find.CurrentMap, worldPos, out Vector3 local))
-                {
-                    worldPos = local;
-                }
-            }
-            catch
-            {
-            }
-        }
-    }
-
-#endif
 
     // ⚠⚠ THE PATH LINE PATCH THAT LIVED HERE HAS BEEN DELETED. ONE OWNER ONLY.
     //

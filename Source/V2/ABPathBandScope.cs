@@ -1,7 +1,4 @@
 using System;
-#if !RIMWORLD_17
-using System.Collections.Generic;
-#endif
 using System.Reflection;
 using System.Text;
 using HarmonyLib;
@@ -27,21 +24,6 @@ namespace AsAboveSoBelow
 
         public static int guardCalls;
 
-#if !RIMWORLD_17
-        public static int filterCalls;
-
-        public static long doorsKept;
-
-        public static long doorsDropped;
-
-        public static long pawnsKept;
-
-        public static long pawnsDropped;
-
-        public static long providersKept;
-
-        public static long providersDropped;
-#endif
 
         public static string lastReject = "none yet";
 
@@ -50,15 +32,6 @@ namespace AsAboveSoBelow
             rejectedSync = 0;
             rejectedAsync = 0;
             guardCalls = 0;
-#if !RIMWORLD_17
-            filterCalls = 0;
-            doorsKept = 0;
-            doorsDropped = 0;
-            pawnsKept = 0;
-            pawnsDropped = 0;
-            providersKept = 0;
-            providersDropped = 0;
-#endif
             lastReject = "none yet";
             ABPerfStats.ResetPath();
         }
@@ -71,15 +44,6 @@ namespace AsAboveSoBelow
                 + rejectedSync + " rejected sync (FindPathNow), "
                 + rejectedAsync + " rejected async (PushRequest)");
             sb.AppendLine("  last rejection: " + lastReject);
-#if !RIMWORLD_17
-            sb.AppendLine("  door/pawn band filter: " + filterCalls + " requests scoped");
-            sb.AppendLine("    doors     kept " + doorsKept + " dropped " + doorsDropped
-                + Share(doorsKept, doorsDropped));
-            sb.AppendLine("    pawns     kept " + pawnsKept + " dropped " + pawnsDropped
-                + Share(pawnsKept, pawnsDropped));
-            sb.AppendLine("    providers kept " + providersKept + " dropped " + providersDropped
-                + Share(providersKept, providersDropped));
-#endif
             sb.AppendLine("  heuristic multiplier: " + HeuristicBoost().ToString("0.00")
                 + (Mathf.Approximately(HeuristicBoost(), 1f) ? " (off, vanilla accuracy)" : "")
                 + "; transit-leg floor " + TransitLegHeuristic.ToString("0.00"));
@@ -94,13 +58,6 @@ namespace AsAboveSoBelow
             return sb.ToString();
         }
 
-#if !RIMWORLD_17
-        private static string Share(long kept, long dropped)
-        {
-            long total = kept + dropped;
-            return total == 0 ? "" : "  (" + (100f * dropped / total).ToString("0.0") + "% skipped)";
-        }
-#endif
 
         internal static float HeuristicBoost()
         {
@@ -129,206 +86,6 @@ namespace AsAboveSoBelow
         /// </summary>
         public const float TransitLegHeuristic = 1.35f;
 
-#if !RIMWORLD_17
-        // Legacy 1.6 worker inputs for segmented routing.
-        //
-        // ⚠ WHY REUSING THE LISTS IS SAFE, AND WHAT WOULD MAKE IT UNSAFE. These lists are
-        // handed to PathGridDoorsBlockedJob, which runs on a WORKER THREAD. Refilling a list
-        // while a job still reads it would be a data race. It cannot happen, because
-        // PathFinderTick opens with ForceCompleteScheduledJobs() and FindPathNow does the
-        // same before it parameterizes: by the time this code runs on tick N, every job from
-        // tick N-1 has already been joined. That is the whole invariant. If a future RimWorld
-        // ever lets a path job straddle a tick boundary, THIS MUST BECOME DOUBLE BUFFERED.
-        //
-        // Rebuild is keyed on (map, tick), so two banded maps pathing in the same tick simply
-        // rebuild twice. The source lists are vanilla's own once-per-tick caches, so a
-        // rebuild is a single pass over doors + pawns + cost providers and allocates nothing
-        // after warmup.
-
-        private static Map bucketMap;
-
-        private static int bucketTick = -1;
-
-        private static List<Thing>[] doorsByBand;
-
-        private static List<Pawn>[] pawnsByBand;
-
-        private static List<IPathFindCostProvider>[] providersByBand;
-
-        private static void EnsureBuckets(Map map, IReadOnlyList<Thing> doors, IReadOnlyList<Pawn> pawns, IReadOnlyList<IPathFindCostProvider> providers)
-        {
-            int num = ((Find.TickManager != null) ? Find.TickManager.TicksGame : 0);
-            if (bucketMap == map && bucketTick == num)
-            {
-                return;
-            }
-
-            bucketMap = map;
-            bucketTick = num;
-            int num2 = Mathf.Max(1, ABBands.BandCount(map));
-            if (doorsByBand == null || doorsByBand.Length != num2)
-            {
-                doorsByBand = new List<Thing>[num2];
-                pawnsByBand = new List<Pawn>[num2];
-                providersByBand = new List<IPathFindCostProvider>[num2];
-                for (int i = 0; i < num2; i++)
-                {
-                    doorsByBand[i] = new List<Thing>();
-                    pawnsByBand[i] = new List<Pawn>();
-                    providersByBand[i] = new List<IPathFindCostProvider>();
-                }
-            }
-            else
-            {
-                for (int j = 0; j < num2; j++)
-                {
-                    doorsByBand[j].Clear();
-                    pawnsByBand[j].Clear();
-                    providersByBand[j].Clear();
-                }
-            }
-
-            if (doors != null)
-            {
-                for (int k = 0; k < doors.Count; k++)
-                {
-                    Thing thing = doors[k];
-                    IntVec3 intVec = thing?.Position ?? IntVec3.Invalid;
-                    if (intVec.IsValid && (ABBands.InGutter(map, intVec) || SpansSeam(map, thing)))
-                    {
-                        for (int l = 0; l < num2; l++)
-                        {
-                            doorsByBand[l].Add(thing);
-                        }
-
-                        continue;
-                    }
-
-                    int num3 = BandIndex(map, intVec, num2);
-                    if (num3 >= 0)
-                    {
-                        doorsByBand[num3].Add(thing);
-                    }
-                }
-            }
-
-            if (pawns != null)
-            {
-                for (int m = 0; m < pawns.Count; m++)
-                {
-                    Pawn pawn = pawns[m];
-                    int num4 = BandIndex(map, pawn?.Position ?? IntVec3.Invalid, num2);
-                    if (num4 >= 0)
-                    {
-                        pawnsByBand[num4].Add(pawn);
-                    }
-                }
-            }
-
-            if (providers == null)
-            {
-                return;
-            }
-
-            for (int n = 0; n < providers.Count; n++)
-            {
-                IPathFindCostProvider pathFindCostProvider = providers[n];
-                IntVec3 c = ((pathFindCostProvider is Thing thing2) ? thing2.Position : IntVec3.Invalid);
-                int num5 = BandIndex(map, c, num2);
-                if (num5 >= 0)
-                {
-                    providersByBand[num5].Add(pathFindCostProvider);
-                }
-            }
-        }
-
-        /// <summary>Band of a cell, or -1 when it cannot be established. ⚠ -1 means DROP
-        /// FROM EVERY BUCKET, which is only correct because the caller falls back to the
-        /// unfiltered vanilla list whenever the requesting pawn's own band is unknown.</summary>
-        private static int BandIndex(Map map, IntVec3 c, int bands)
-        {
-            if (!c.IsValid || !c.InBounds(map))
-            {
-                return -1;
-            }
-            int b = ABBands.BandOf(map, c);
-            return b >= 0 && b < bands ? b : -1;
-        }
-
-        internal static void ScopeDoorJob(PathGridDoorsBlockedJob job, PathRequest request)
-        {
-            if (job == null || request == null)
-            {
-                return;
-            }
-            Map map = request.map;
-            if (map == null || !ABBands.Banded(map))
-                return;
-            int bands = Mathf.Max(1, ABBands.BandCount(map));
-            if (bands < 2)
-            {
-                return;
-            }
-            // ⚠ SCOPE ON THE REQUEST'S START, NOT ON THE PAWN'S CURRENT POSITION. The job's
-            // own `start` field is request.Start, and a pawn mid transit can be standing in a
-            // band the request was not issued from.
-            int band = BandIndex(map, request.Start, bands);
-            if (band < 0 || ABBands.InGutter(map, request.Start))
-            {
-                return;
-            }
-
-            EnsureBuckets(map, job.doors, job.pawns, job.providers);
-            filterCalls++;
-
-            int wasDoors = job.doors?.Count ?? 0;
-            int wasPawns = job.pawns?.Count ?? 0;
-            int wasProviders = job.providers?.Count ?? 0;
-
-            job.doors = doorsByBand[band];
-            job.pawns = pawnsByBand[band];
-            job.providers = providersByBand[band];
-
-            doorsKept += job.doors.Count;
-            doorsDropped += wasDoors - job.doors.Count;
-            pawnsKept += job.pawns.Count;
-            pawnsDropped += wasPawns - job.pawns.Count;
-            providersKept += job.providers.Count;
-            providersDropped += wasProviders - job.providers.Count;
-        }
-        private static bool SpansSeam(Map map, Thing t)
-        {
-            if (t == null || (t.def.size.x <= 1 && t.def.size.z <= 1))
-            {
-                return false;
-            }
-
-            CellRect cellRect = t.OccupiedRect();
-            int num = -1;
-            foreach (IntVec3 item in cellRect)
-            {
-                if (item.InBounds(map))
-                {
-                    if (ABBands.InGutter(map, item))
-                    {
-                        return true;
-                    }
-
-                    int num2 = ABBands.BandOf(map, item);
-                    if (num < 0)
-                    {
-                        num = num2;
-                    }
-                    else if (num2 != num)
-                    {
-                        return true;
-                    }
-                }
-            }
-
-            return false;
-        }
-#endif
 
         // ---- the cross band test --------------------------------------------
 
@@ -463,10 +220,8 @@ namespace AsAboveSoBelow
             PathEndMode peMode, ref PawnPath __result)
         {
             ABPerfStats.NoteRequest(___map, sync: true);
-#if RIMWORLD_17
             if (ABNativePortals.UsesNativeRouting(___map))
                 return true;
-#endif
             if (!ABPathBandScope.CrossBand(___map, start, target, peMode, null, out string why))
                 return true;
 
@@ -501,10 +256,8 @@ namespace AsAboveSoBelow
             }
 
             ABPerfStats.NoteRequest(request.map, sync: false);
-#if RIMWORLD_17
             if (ABNativePortals.UsesNativeRouting(request.map))
                 return true;
-#endif
             if (ABWormholePather.ConsumeDoomedRequest(request.pawn))
             {
                 ABPathBandScope.rejectedAsync++;
@@ -525,22 +278,6 @@ namespace AsAboveSoBelow
         }
     }
 
-#if !RIMWORLD_17
-    // The segmented 1.6 pathfinder only searches the departure band.
-    [HarmonyPatch]
-    public static class Patch_PathFinder_ABDoorPawnBandScope
-    {
-        private static MethodBase TargetMethod()
-        {
-            return AccessTools.Method(typeof(PathFinder), "ParameterizeDoorBlockedJob");
-        }
-
-        private static void Postfix(PathGridDoorsBlockedJob job, PathRequest request)
-        {
-            ABPathBandScope.ScopeDoorJob(job, request);
-        }
-    }
-#endif
 
     // =====================================================================================
     // HEURISTIC STRENGTH

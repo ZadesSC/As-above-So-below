@@ -138,7 +138,7 @@
   <ResearchProjectDef>
     <defName>AB2_ElevatorTech</defName>
     <label>elevator</label>
-    <description>Sink a counterweighted elevator shaft that serves every level of the colony from a single footprint, linking each level directly to every other.</description>
+    <description>Counterweighted elevator shafts serve every level of the colony from a single footprint. New elevator construction is temporarily unavailable.</description>
     <baseCost>1600</baseCost>
     <techLevel>Industrial</techLevel>
     <researchViewX>7.00</researchViewX>

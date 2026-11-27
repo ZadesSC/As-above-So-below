@@ -202,9 +202,7 @@ namespace AsAboveSoBelow
             }
 
             list.Add(new Pair { a = a, b = b });
-#if RIMWORLD_17
             ABNativePortals.Invalidate(a.Map);
-#endif
             RearmAll(a.Map);
         }
 
@@ -224,9 +222,7 @@ namespace AsAboveSoBelow
                 TearDown(p);
                 list.RemoveAt(i);
             }
-#if RIMWORLD_17
             ABNativePortals.Invalidate(map);
-#endif
             map.reachability.ClearCache();
         }
 

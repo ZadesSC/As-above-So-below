@@ -53,8 +53,7 @@ namespace AsAboveSoBelow
     ///
     /// COST (§36e): the game's every non-instanced DrawMesh - section submeshes, dynamic
     /// things, overlays, a few hundred to low thousands per frame - now crosses one
-    /// trampoline, one static float read and a branch. That is the price of "all of them"
-    /// and it is the row named ABBelowMeshTranslate if Circinus ever disagrees.
+    /// trampoline, one static float read and a branch.
     ///
     /// INSTALL IS MANUAL, NEVER ATTRIBUTED: a guessed Unity signature in a [HarmonyPatch]
     /// attribute fails at PatchAll time and takes every other patch in the assembly down

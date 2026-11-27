@@ -286,6 +286,9 @@
        one footprint), not speed - transit is instantaneous for every link type. -->
   <ThingDef ParentName="AB2_LinkBase">
     <defName>AB2_Elevator</defName>
+    <!-- New construction is paused pending native routing (#9).
+         Keep the inherited designation category so existing blueprints and frames can load. -->
+    <canGenerateDefaultDesignator>false</canGenerateDefaultDesignator>
     <label>elevator</label>
     <uiOrder>2066</uiOrder>
     <description>A counterweighted elevator shaft connecting every level of the colony through a single 2x2 footprint. Completing it opens all levels it reaches and creates a matching car on each. Colonists ride between any two levels directly, and haul, work, sleep and fight across the connection exactly as they would across a corridor.</description>

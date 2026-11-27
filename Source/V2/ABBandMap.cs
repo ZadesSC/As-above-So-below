@@ -405,9 +405,7 @@ namespace AsAboveSoBelow
                 Log.Error(ABLog.Tag + " V2: sky-sync repair threw (map left as-is): " + e);
             }
 
-#if RIMWORLD_17
             ABPollutionCount.ClearPollutionFromInvalidTerrain(map);
-#endif
             ABGLBiomeGridSync.Sync(map, this, "finalize-init");
 
             // Always open on the ground floor. Runs for a new colony AND for a loaded save,
@@ -569,9 +567,7 @@ namespace AsAboveSoBelow
             this.bandCount = bandCount;
             this.bandHeight = bandHeight;
             this.surfaceBand = surfaceBand;
-#if RIMWORLD_17
             ABNativePortals.Invalidate(map);
-#endif
         }
 
         /// <summary>Drop the per-band biome memo so an abandoned map is not pinned alive by

@@ -2,8 +2,7 @@
 #
 # WHY THIS EXISTS: ABStairAnim.ArtOffsets and the graphicData drawOffsets are both "where is
 # the art actually drawn relative to the cell it occupies", and both were previously eyeballed.
-# Modmixer ships no imagemagick / PIL / sharp, but Windows PowerShell has System.Drawing, so
-# this is the cheapest exact answer available.
+# This script uses Windows PowerShell and System.Drawing to measure them.
 #
 #   powershell -ExecutionPolicy Bypass -File Tools/MeasureSprites.ps1 -CellsX 2 -CellsZ 2 Textures/Things/Building/AB_Stairs*.png
 #

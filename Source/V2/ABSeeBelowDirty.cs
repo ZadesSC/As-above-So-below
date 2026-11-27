@@ -42,9 +42,7 @@ namespace AsAboveSoBelow
         private static void Postfix(Map ___map)
         {
             ABBands.CompOf(___map)?.DirtySeeBelowCache();
-#if RIMWORLD_17
             ABPollutionCount.Invalidate(___map);
-#endif
         }
     }
 }

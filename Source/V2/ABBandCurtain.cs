@@ -168,11 +168,7 @@ namespace AsAboveSoBelow
                 depthCurtainResolved = true;
                 try
                 {
-#if RIMWORLD_17
                     Shader shader = ShaderDatabase.SolidColor;
-#else
-                    Shader shader = Shader.Find("Hidden/Internal-Colored");
-#endif
                     if (shader == null)
                     {
                         ABLog.Dev("V2 band curtain: Hidden/Internal-Colored is not in this build; space maps keep the clip-only curtain.");
@@ -184,19 +180,11 @@ namespace AsAboveSoBelow
                         hideFlags = HideFlags.HideAndDontSave,
                         renderQueue = 1000
                     };
-#if RIMWORLD_17
                     material.SetFloat("_BlendSrc", 0f);
                     material.SetFloat("_BlendDst", 1f);
                     material.SetFloat("_CullMode", 0f);
                     material.SetFloat("_ZWriteMode", 1f);
                     material.SetFloat("_ZTestMode", 4f);
-#else
-                    material.SetInt("_SrcBlend", 0);
-                    material.SetInt("_DstBlend", 1);
-                    material.SetInt("_Cull", 0);
-                    material.SetInt("_ZWrite", 1);
-                    material.SetInt("_ZTest", 8);
-#endif
                     depthCurtain = material;
                 }
                 catch (Exception ex)
