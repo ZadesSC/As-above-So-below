@@ -25,7 +25,7 @@ namespace AsAboveSoBelow
     /// guard. False comments outlive their truth window; date them or delete them.)
     ///
     /// THE RULE, in precedence order, applied to the cell one Slot above `below`:
-    ///   1. constructed roof below    -> AB_RoofSurface (buildable AND walkable)
+    ///   1. constructed or thin rock roof below -> AB_RoofSurface (buildable AND walkable)
     ///   2. natural roof below        -> AB_MountainTop (mountain mass)
     ///   3. impassable edifice below  -> AB_WallTop     (buildable, NOT walkable)
     ///   4. otherwise                 -> AB_OpenAir
@@ -140,7 +140,7 @@ namespace AsAboveSoBelow
         /// always claimed: a sky cell is derived from the cell below, and laying a floor on
         /// it is decoration on top of that, not a change of ownership.
         /// </summary>
-        private static TerrainDef DerivedLayerAt(TerrainGrid grid, IntVec3 c)
+        internal static TerrainDef DerivedLayerAt(TerrainGrid grid, IntVec3 c)
         {
             return grid.UnderTerrainAt(c) ?? grid.TerrainAt(c);
         }
@@ -214,7 +214,7 @@ namespace AsAboveSoBelow
         // neighbour is usable, so the transit itself still completes; the pawn simply has
         // nowhere to step. Walling yourself in is a thing RimWorld lets you do, and a
         // predictable rule the player can see and undo beats an invisible one that quietly
-        // refuses. OccupiedAbove still refuses to dissolve ground out from under a pawn or
+        // refuses. SyncAbove still refuses to dissolve ground out from under a pawn or
         // building that is standing on it right now, which is the case that actually matters.
 
         /// <summary>Recompute the cell directly above <paramref name="below"/>.</summary>
@@ -256,7 +256,7 @@ namespace AsAboveSoBelow
             {
                 return;
             }
-            if (want == ABDefOf.AB_OpenAir && OccupiedAbove(map, target))
+            if (want == ABDefOf.AB_OpenAir && RooftopOccupant(map, target) != null)
             {
                 // Ground is never dissolved out from under a standing pawn or building
                 // (§45). This holds the platform for THIS PASS only - a later roof or
@@ -274,7 +274,7 @@ namespace AsAboveSoBelow
         /// haulable, and blocking on items would let one forgotten chunk pin a platform
         /// forever. Runs only on the solid -> open-air transition, never on the load
         /// sweep's common path.</summary>
-        private static bool OccupiedAbove(Map map, IntVec3 target)
+        internal static Thing RooftopOccupant(Map map, IntVec3 target)
         {
             System.Collections.Generic.List<Thing> things =
                 map.thingGrid.ThingsListAtFast(target);
@@ -283,17 +283,22 @@ namespace AsAboveSoBelow
                 ThingCategory cat = things[i].def.category;
                 if (cat == ThingCategory.Pawn || cat == ThingCategory.Building)
                 {
-                    return true;
+                    return things[i];
                 }
             }
-            return false;
+            return null;
+        }
+
+        internal static bool IsRooftopRoof(RoofDef roof)
+        {
+            return roof != null && (!roof.isNatural || roof == RoofDefOf.RoofRockThin);
         }
 
         private static TerrainDef Resolve(Map map, IntVec3 below)
         {
             RoofDef roofDef = map.roofGrid.RoofAt(below);
             bool flag = ABOrbitRules.ProjectsUpperLevel(map, below);
-            if (roofDef != null && !roofDef.isNatural)
+            if (IsRooftopRoof(roofDef))
             {
                 return flag ? ABDefOf.AB_RoofSurface : ABDefOf.AB_OpenAir;
             }
@@ -394,7 +399,7 @@ namespace AsAboveSoBelow
             {
                 return sb.Append(" -> no change needed (already correct)").ToString();
             }
-            if (want == ABDefOf.AB_OpenAir && OccupiedAbove(map, target))
+            if (want == ABDefOf.AB_OpenAir && RooftopOccupant(map, target) != null)
             {
                 return sb.Append(" -> STOP: a pawn or building stands on the target"
                     + " (deferred, not refused - trim again once it moves)").ToString();
@@ -418,7 +423,7 @@ namespace AsAboveSoBelow
         /// every existing save at once. These two rules can only ever move a cell back to a
         /// state the generator itself produces:
         ///
-        ///   1. AB_WallTop whose cell one Slot below has a NATURAL roof -> AB_MountainTop.
+        ///   1. AB_WallTop whose cell one Slot below has a natural roof -> roof-derived terrain.
         ///      A player's wall never has a natural roof over it, so player-made wall tops
         ///      are outside the rule by construction.
         ///   2. AB_OpenAir on or beside a link in a sky band -> AB_RoofSurface, over exactly
@@ -455,11 +460,21 @@ namespace AsAboveSoBelow
                         continue;
                     }
                     RoofDef roof = roofs.RoofAt(below);
-                    if (roof != null && roof.isNatural)
+                    if (roof == null || !roof.isNatural)
+                        continue;
+
+                    if (roof == RoofDefOf.RoofRockThin)
+                    {
+                        if (!ABOrbitRules.ProjectsUpperLevel(map, below))
+                            continue;
+
+                        grid.SetTerrain(c, ABDefOf.AB_RoofSurface);
+                    }
+                    else
                     {
                         grid.SetTerrain(c, ABDefOf.AB_MountainTop);
-                        mass++;
                     }
+                    mass++;
                 }
             }
 
@@ -510,8 +525,7 @@ namespace AsAboveSoBelow
                 // pass; from then on the sync derives the platform from the roof and the
                 // no-roof designator below is the remove tool. SetRoof fires the sync
                 // postfix, which re-derives the cell to the platform it already is.
-                CellRect apron = link.OccupiedRect()
-                    .ExpandedBy(ABWormholePather.LandingRadius).ClipInsideMap(map);
+                CellRect apron = Building_ABStairs2.LandingApron(map, link.OccupiedRect(), link.def);
                 foreach (IntVec3 c in apron)
                 {
                     if (!c.InBounds(map) || !bandRect.Contains(c)
@@ -532,7 +546,7 @@ namespace AsAboveSoBelow
             if (mass > 0 || landing > 0 || backfilled > 0)
             {
                 Log.Message(ABLog.Tag + " V2: sky-sync repair on map " + map.uniqueID + " - "
-                    + mass + " mass cell(s) restored to mountain top, " + landing
+                    + mass + " wall tops repaired, " + landing
                     + " landing cell(s) restored to rooftop, " + backfilled
                     + " landing roof(s) backfilled below platforms.");
             }

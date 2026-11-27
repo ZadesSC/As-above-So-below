@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LanguageData>
+  <AB_RoofRemovalBuilding>Roof supports {0} on the level above.</AB_RoofRemovalBuilding>
+  <AB_RoofRemovalOccupied>Wait for {0} to leave the rooftop.</AB_RoofRemovalOccupied>
+  <AB_RoofRemovalUpperRoof>The level above has a roof of its own.</AB_RoofRemovalUpperRoof>
+</LanguageData>

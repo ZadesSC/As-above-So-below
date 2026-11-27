@@ -332,7 +332,7 @@ namespace AsAboveSoBelow
 
             Building_ABStairs2 building_ABStairs = intVec.GetFirstThing<Building_ABStairs2>(map);
             CellRect footprint = building_ABStairs?.OccupiedRect() ?? GenAdj.OccupiedRect(intVec, Rotation, thingDef.Size);
-            CarveLanding(map, bands, footprint, targetBand);
+            CarveLanding(map, bands, footprint, targetBand, building_ABStairs?.def ?? thingDef);
             if (building_ABStairs == null)
             {
                 spawningCounterpart = true;
@@ -377,6 +377,16 @@ namespace AsAboveSoBelow
             return DefDatabase<ThingDef>.GetNamedSilentFail(name);
         }
 
+        internal static CellRect LandingApron(Map map, CellRect footprint, ThingDef connector)
+        {
+            int margin = connector.defName switch
+            {
+                "AB2_LadderUp" or "AB2_LadderDown" or "AB2_StairsUp" or "AB2_StairsDown" => 1,
+                _ => ABWormholePather.LandingRadius
+            };
+            return footprint.ExpandedBy(margin).ClipInsideMap(map);
+        }
+
         /// <summary>Makes the far END (and an apron around it) usable: clears rock below,
         /// lays a platform above, unfogs, and leaves the roof alone below so the basement
         /// stays a roofed interior exactly as a mined-out shaft would.
@@ -391,15 +401,13 @@ namespace AsAboveSoBelow
         ///     Zero approach cells were carved and the arriving pawn was sealed in solid
         ///     rock on every side. Observed as a colonist stranded on the stairs.
         ///
-        /// The margin is ABWormholePather.LandingRadius, and the two MUST agree: LandingCell
-        /// sets a transiting pawn down anywhere within LandingRadius of the anchor, so a
-        /// pocket smaller than that can drop a pawn straight into unmined rock. Carving one
-        /// cell more than strictly needed also gives arrivals room to step aside instead of
-        /// stacking on the anchor, which is the congestion that caused earlier stair jams.</summary>
-        private static void CarveLanding(Map map, ABBandMap bands, CellRect footprint, int targetBand)
+        /// Ladder and standard stairs carve one full ring. Larger links retain a wider
+        /// apron for clearance. Transit searches for a usable landing independently.</summary>
+        private static void CarveLanding(Map map, ABBandMap bands, CellRect footprint, int targetBand,
+            ThingDef connector)
         {
             bool sky = targetBand > bands.surfaceBand;
-            CellRect apron = footprint.ExpandedBy(ABWormholePather.LandingRadius).ClipInsideMap(map);
+            CellRect apron = LandingApron(map, footprint, connector);
             CellRect bandRect = bands.RectOfBand(targetBand);
             foreach (IntVec3 c in apron)
             {
@@ -423,7 +431,7 @@ namespace AsAboveSoBelow
                     // the origin apron below, not terrain magic - so the player's vanilla
                     // remove-roof area below trims it, ABSkySync derives it, and it obeys
                     // the same rules as every other rooftop. The stair def holdsRoof (via
-                    // DoorBase), and LandingRadius (2) is well inside the 6.9 support
+                    // DoorBase), and the apron is well inside the 6.9 support
                     // range, so the apron roof can never collapse while the link stands.
                     // Existing roofs (a natural roof above all) are never overwritten.
                     IntVec3 below = bands.Translate(c, targetBand - 1);
