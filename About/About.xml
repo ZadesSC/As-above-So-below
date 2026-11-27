@@ -25,6 +25,7 @@ Colonists cross levels on their own for hauling, construction, meals, rest, clea
 [*][b]Ladder[/b], one cell: cheap, cramped, traffic queues.
 [*][b]Staircase[/b], two by two: the baseline.
 [*][b]Grand staircase[/b], three by three: wide enough that colonists going up and down stop waiting for each other.
+[*][b]Vehicle ramp[/b], five by five: a walking route for colonists and, with Vehicle Framework active, a route for drafted ground vehicles.
 [*][b]Elevator[/b], two by two: existing shafts still connect their levels. New elevator construction is temporarily unavailable.
 [*][b]Placement tells you the truth[/b]: it shows the cells colonists can enter from and refuses spots that would jam.
 [/list]
@@ -147,6 +148,7 @@ Every one of these is optional. Nothing loads unless you already own the mod.
     <li>CETeam.CombatExtended</li>
     <li>Owlchemist.GiddyUp</li>
     <li>MemeGoddess.GiddyUp</li>
+    <li>SmashPhil.VehicleFramework</li>
   </loadAfter>
   <incompatibleWith>
     <!-- The original As above, So below. This is a ground-up rearchitecture of the

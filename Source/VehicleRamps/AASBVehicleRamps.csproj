@@ -1,0 +1,55 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Build (keep intermediate output outside the repository):
+       dotnet build Source/VehicleRamps/AASBVehicleRamps.csproj -c Release -p:BaseIntermediateOutputPath=/absolute/disposable/obj/
+       Override the dependency locations with -p:RimWorldModsDir=..., -p:AASBDir=... or
+       -p:VehicleFrameworkDir=... when the standalone test copy lives elsewhere. Only
+       AASBVehicleRamps.dll is written to 1.7/VehicleFramework/Assemblies; references stay outside the mod. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <Nullable>disable</Nullable>
+    <AssemblyName>AASBVehicleRamps</AssemblyName>
+    <RootNamespace>AASBVehicleRamps</RootNamespace>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+    <Deterministic>true</Deterministic>
+    <DebugType>none</DebugType>
+    <OutputPath>../../1.7/VehicleFramework/Assemblies/</OutputPath>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <GenerateDependencyFile>false</GenerateDependencyFile>
+    <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
+    <RimWorldModsDir Condition="'$(RimWorldModsDir)' == ''">$(HOME)/Games/RimWorld-ModTesting/Game/Mods</RimWorldModsDir>
+    <AASBDir Condition="'$(AASBDir)' == ''">../..</AASBDir>
+    <VehicleFrameworkDir Condition="'$(VehicleFrameworkDir)' == ''">$(RimWorldModsDir)/Workshop-3014915404</VehicleFrameworkDir>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Remove="Tools/**" />
+    <PackageReference Include="Krafs.Rimworld.Ref" Version="1.7.4977-alpha.2" PrivateAssets="all" ExcludeAssets="runtime" />
+    <PackageReference Include="Lib.Harmony" Version="3.0.0-rc.2" PrivateAssets="all" ExcludeAssets="runtime" />
+    <PackageReference Include="Krafs.Publicizer" Version="2.3.2" PrivateAssets="all" />
+    <!-- Internal Vehicle Framework path-search types and AASB link internals are reached through
+         publicized compile references. Krafs.Publicizer emits IgnoresAccessChecksTo for them; every
+         member used is also resolved and type-checked at startup (see StartupBinding). -->
+    <Publicize Include="SmashTools.PathFinder;Vehicles;CoreLib;UnityStubs;AsAboveSoBelow" />
+    <Reference Include="AsAboveSoBelow">
+      <HintPath>$(AASBDir)/1.7/Assemblies/AsAboveSoBelow.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Vehicles">
+      <HintPath>$(VehicleFrameworkDir)/1.7/Assemblies/Vehicles.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="SmashTools">
+      <HintPath>$(VehicleFrameworkDir)/1.7/Assemblies/SmashTools.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="SmashTools.PathFinder">
+      <HintPath>$(VehicleFrameworkDir)/1.7/Assemblies/SmashTools.PathFinder.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="CoreLib">
+      <HintPath>$(VehicleFrameworkDir)/1.7/Assemblies/CoreLib.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+</Project>

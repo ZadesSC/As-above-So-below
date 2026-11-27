@@ -4,5 +4,8 @@
   <v1.7>
     <li>/</li>
     <li>1.7</li>
+    <!-- The standalone add-on supplies both its own ramp defs and its own VF patches. -->
+    <li IfModNotActive="zades.aasb.vehicleramps">1.7/VehicleRamps</li>
+    <li IfModActive="SmashPhil.VehicleFramework" IfModNotActive="zades.aasb.vehicleramps">1.7/VehicleFramework</li>
   </v1.7>
 </loadFolders>

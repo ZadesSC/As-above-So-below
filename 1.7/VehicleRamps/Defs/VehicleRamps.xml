@@ -1,0 +1,118 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Defs>
+  <!-- 5x5 vehicle ramps modelled on AASB's AB2_GrandBase staircases. For rotation R the low end is
+       on the R side: an Up ramp on floor N and a Down ramp on floor N+1 with the same rotation form one
+       continuous ramp. AASB creates the counterpart automatically from counterpartDef. -->
+  <ThingDef ParentName="AB2_LinkBase">
+    <defName>AB2_VehicleRampDown</defName>
+    <label>vehicle ramp down</label>
+    <uiOrder>2066</uiOrder>
+    <description>A five-cell ramp leading down. With Vehicle Framework support active, drafted ground vehicles can drive through it to the level below; colonists use it like a staircase. Completing it opens the level below and creates a matching ramp there.</description>
+    <size>(5,5)</size>
+    <costStuffCount>500</costStuffCount>
+    <researchPrerequisites>
+      <li>AB2_Stairs</li>
+    </researchPrerequisites>
+    <statBases>
+      <WorkToBuild>20000</WorkToBuild>
+      <Flammability>0</Flammability>
+      <Mass>200</Mass>
+    </statBases>
+    <graphicData>
+      <texPath>Things/Building/AB_VehicleRampDown</texPath>
+      <graphicClass>AsAboveSoBelow.Graphic_ABLink</graphicClass>
+      <drawSize>(5,5)</drawSize>
+      <damageData>
+        <enabled>false</enabled>
+      </damageData>
+    </graphicData>
+    <building>
+      <blueprintGraphicData>
+        <texPath>Things/Building/AB_VehicleRampDown</texPath>
+        <graphicClass>AsAboveSoBelow.Graphic_ABLink</graphicClass>
+        <drawSize>(5,5)</drawSize>
+      </blueprintGraphicData>
+    </building>
+    <uiIconPath>Things/Building/AB_VehicleRampDown</uiIconPath>
+    <modExtensions>
+      <li Class="AsAboveSoBelow.ABBandStairsExt">
+        <levelDelta>-1</levelDelta>
+        <counterpartDef>AB2_VehicleRampUp</counterpartDef>
+        <approachCells>
+          <li>(2,-1)</li>  <!-- north: mouth on the side opposite the rotation -->
+          <li>(-1,2)</li>  <!-- east -->
+          <li>(2,5)</li>   <!-- south -->
+          <li>(5,2)</li>   <!-- west -->
+        </approachCells>
+      </li>
+      <li Class="AsAboveSoBelow.ABLinkArtExt">
+        <drawSizes>
+          <li>(5,5)</li>
+          <li>(5,5)</li>
+          <li>(5,5)</li>
+          <li>(5,5)</li>
+        </drawSizes>
+      </li>
+      <!-- Marks the def for the vehicle portal table. The footprint keeps Vehicle
+           Framework's default door rule (impassable to vehicles); vehicles cross from the mouth
+           approach line instead of driving over the ramp cells. -->
+      <li Class="AsAboveSoBelow.ABVehicleRampExt" />
+    </modExtensions>
+  </ThingDef>
+  <ThingDef ParentName="AB2_LinkBase">
+    <defName>AB2_VehicleRampUp</defName>
+    <label>vehicle ramp up</label>
+    <uiOrder>2067</uiOrder>
+    <description>A five-cell ramp leading up. With Vehicle Framework support active, drafted ground vehicles can drive through it to the level above; colonists use it like a staircase. Completing it opens the level above and creates a matching ramp there.</description>
+    <size>(5,5)</size>
+    <costStuffCount>500</costStuffCount>
+    <researchPrerequisites>
+      <li>AB2_Stairs</li>
+    </researchPrerequisites>
+    <statBases>
+      <WorkToBuild>20000</WorkToBuild>
+      <Flammability>0</Flammability>
+      <Mass>200</Mass>
+    </statBases>
+    <graphicData>
+      <texPath>Things/Building/AB_VehicleRampUp</texPath>
+      <graphicClass>AsAboveSoBelow.Graphic_ABLink</graphicClass>
+      <drawSize>(5,5)</drawSize>
+      <damageData>
+        <enabled>false</enabled>
+      </damageData>
+    </graphicData>
+    <building>
+      <blueprintGraphicData>
+        <texPath>Things/Building/AB_VehicleRampUp</texPath>
+        <graphicClass>AsAboveSoBelow.Graphic_ABLink</graphicClass>
+        <drawSize>(5,5)</drawSize>
+      </blueprintGraphicData>
+    </building>
+    <uiIconPath>Things/Building/AB_VehicleRampUp</uiIconPath>
+    <modExtensions>
+      <li Class="AsAboveSoBelow.ABBandStairsExt">
+        <levelDelta>1</levelDelta>
+        <counterpartDef>AB2_VehicleRampDown</counterpartDef>
+        <approachCells>
+          <li>(2,5)</li>   <!-- north: mouth on the rotation side -->
+          <li>(5,2)</li>   <!-- east -->
+          <li>(2,-1)</li>  <!-- south -->
+          <li>(-1,2)</li>  <!-- west -->
+        </approachCells>
+      </li>
+      <li Class="AsAboveSoBelow.ABLinkArtExt">
+        <drawSizes>
+          <li>(5,5)</li>
+          <li>(5,5)</li>
+          <li>(5,5)</li>
+          <li>(5,5)</li>
+        </drawSizes>
+      </li>
+      <!-- Marks the def for the vehicle portal table. The footprint keeps Vehicle
+           Framework's default door rule (impassable to vehicles); vehicles cross from the mouth
+           approach line instead of driving over the ramp cells. -->
+      <li Class="AsAboveSoBelow.ABVehicleRampExt" />
+    </modExtensions>
+  </ThingDef>
+</Defs>
