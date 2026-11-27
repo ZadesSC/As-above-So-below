@@ -1,4 +1,6 @@
 # Build artifacts (versioned Assemblies DLLs are committed as shipped artifacts)
 Source/obj/
 Source/bin/
+Source/VehicleRamps/obj/
+Source/VehicleRamps/bin/
 *.pdb

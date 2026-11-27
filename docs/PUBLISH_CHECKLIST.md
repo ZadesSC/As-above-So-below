@@ -12,6 +12,9 @@ old tree. Work top to bottom; nothing here is optional.
 - [ ] Build is **0 warnings, 0 errors**.
 - [ ] `1.7/Assemblies/` contains **only** `AsAboveSoBelow.dll`. No `.pdb`
       (`DebugType=none` in the csproj already enforces this), no stray dlls.
+- [ ] Build the [optional ramp assembly](VEHICLE_RAMPS.md) after the core build.
+      Include the `1.7/VehicleRamps/` assets and only `AASBVehicleRamps.dll` in
+      `1.7/VehicleFramework/Assemblies/`.
 - [ ] **Never ship `0Harmony.dll`.** Harmony is a mod dependency, declared in About.xml.
 
 ## 2. Log hygiene

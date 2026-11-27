@@ -20,6 +20,7 @@
     <DebugSymbols>false</DebugSymbols>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Remove="VehicleRamps/**" />
     <Reference Include="Assembly-CSharp">
       <HintPath>$(RimWorldManagedDir)/Assembly-CSharp.dll</HintPath>
       <Private>false</Private>

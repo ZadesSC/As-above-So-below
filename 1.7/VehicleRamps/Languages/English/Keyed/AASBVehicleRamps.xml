@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LanguageData>
+  <AASBVehicleRamps_EntryBlocked>{0} stopped at the vehicle ramp: the entry lane stays blocked.</AASBVehicleRamps_EntryBlocked>
+  <AASBVehicleRamps_ExitBlocked>{0} stopped at the vehicle ramp: the far side stays blocked.</AASBVehicleRamps_ExitBlocked>
+</LanguageData>
