@@ -85,7 +85,9 @@ namespace AsAboveSoBelow
     /// system re-derives the entire sky band from scratch. Anything the generator or
     /// CarveLanding wrote that this resolver would not reproduce is silently overwritten at
     /// that moment and then saved. An event hook that looks incremental is a FULL SWEEP on
-    /// the load path; assume it and make the resolver agree with the generator.
+    /// the load path; assume it and make the resolver agree with the generator. (That sweep
+    /// is now replayed once at Map.FinalizeInit, after everything has respawned - see
+    /// deferringMap.)
     /// </summary>
     public static class ABSkySync
     {
@@ -217,11 +219,71 @@ namespace AsAboveSoBelow
         // refuses. SyncAbove still refuses to dissolve ground out from under a pawn or
         // building that is standing on it right now, which is the case that actually matters.
 
+        /// <summary>
+        /// The map whose saved things are being respawned right now (Map.FinalizeLoading),
+        /// and the cells whose sync was asked for meanwhile.
+        ///
+        /// ⚠ WHY LOAD MUST WAIT (issue #21, "stacked wall stands on open air after reload").
+        /// FinalizeLoading respawns buildings one at a time, and every EdificeGrid.Register
+        /// syncs the 3x3 around the building (SyncRectFor). So the first wall of a run to
+        /// come back re-derives the cells above its NEIGHBOURS while their walls are still
+        /// unspawned: each resolves to AB_OpenAir and is written, stripping any floor laid
+        /// there. When the neighbour's own wall registers a moment later the cell above is
+        /// already protected - a wall stacked on it has respawned too, so CarriesOwnStructure
+        /// refuses - and the stacked wall is left standing on open air for good. Which cells
+        /// lose depends on spawn order, so it looked random from save to save.
+        ///
+        /// Deferring keeps exactly the same set of cells and the same rules; it only moves
+        /// the work to Map.FinalizeInit, which runs after everything has respawned, so every
+        /// resolve sees the finished map. Deduplicated by cell index, which also makes the
+        /// load cheaper than the per-building 3x3 storms it replaces.
+        /// </summary>
+        private static Map deferringMap;
+
+        private static readonly HashSet<int> deferredCells = new HashSet<int>();
+
+        internal static void BeginDeferring(Map map)
+        {
+            deferringMap = map;
+            deferredCells.Clear();
+        }
+
+        /// <summary>Replay every sync requested while <paramref name="map"/> was loading.
+        /// Safe to call more than once; only the first call after BeginDeferring does work.</summary>
+        internal static void FlushDeferred(Map map)
+        {
+            if (map == null || deferringMap != map)
+            {
+                return;
+            }
+            deferringMap = null;
+            if (deferredCells.Count == 0)
+            {
+                return;
+            }
+            int[] cells = new int[deferredCells.Count];
+            deferredCells.CopyTo(cells);
+            deferredCells.Clear();
+            Array.Sort(cells);
+            for (int i = 0; i < cells.Length; i++)
+            {
+                SyncAbove(map, map.cellIndices.IndexToCell(cells[i]));
+            }
+        }
+
         /// <summary>Recompute the cell directly above <paramref name="below"/>.</summary>
         public static void SyncAbove(Map map, IntVec3 below)
         {
             if (Suspended || map == null || !ABGuard.On(ABGuard.RoofSync))
             {
+                return;
+            }
+            if (map == deferringMap)
+            {
+                if (below.InBounds(map))
+                {
+                    deferredCells.Add(map.cellIndices.CellToIndex(below));
+                }
                 return;
             }
             ABBandMap bands = ABBands.CompOf(map);
@@ -616,6 +678,49 @@ namespace AsAboveSoBelow
     /// <summary>...and going away again. Runs as a POSTFIX so the grid has already been
     /// cleared - a prefix would still see the wall and re-derive AB_WallTop, leaving a
     /// phantom ledge above a wall that no longer exists.</summary>
+    /// <summary>Defers sky sync while a loaded map respawns its things; see
+    /// ABSkySync.deferringMap. The finalizer flushes even if loading threw, so a failed
+    /// load can never leave sync switched off for the rest of the session.</summary>
+    [HarmonyPatch(typeof(Map), nameof(Map.FinalizeLoading))]
+    public static class Patch_Map_ABDeferSkySyncDuringLoad
+    {
+        private static void Prefix(Map __instance)
+        {
+            ABSkySync.BeginDeferring(__instance);
+        }
+
+        private static void Finalizer(Map __instance)
+        {
+            try
+            {
+                ABSkySync.FlushDeferred(__instance);
+            }
+            catch (Exception e)
+            {
+                ABGuard.Disable(ABGuard.RoofSync, e, "V2 sky sync load flush");
+            }
+        }
+    }
+
+    /// <summary>FinalizeLoading calls FinalizeInit once every saved thing is back on the
+    /// map, and before regions, power nets or PostMapInit read the terrain: the right
+    /// moment to replay the deferred sky sync.</summary>
+    [HarmonyPatch(typeof(Map), nameof(Map.FinalizeInit))]
+    public static class Patch_Map_ABFlushSkySyncAfterLoad
+    {
+        private static void Prefix(Map __instance)
+        {
+            try
+            {
+                ABSkySync.FlushDeferred(__instance);
+            }
+            catch (Exception e)
+            {
+                ABGuard.Disable(ABGuard.RoofSync, e, "V2 sky sync load flush");
+            }
+        }
+    }
+
     [HarmonyPatch(typeof(EdificeGrid), nameof(EdificeGrid.DeRegister))]
     public static class Patch_EdificeGrid_ABDeRegister
     {

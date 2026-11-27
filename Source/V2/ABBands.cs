@@ -247,6 +247,29 @@ namespace AsAboveSoBelow
             return t != null && (t == ABDefOf.AB_OpenAir || t == ABDefOf.AB_WallTop);
         }
 
+        /// <summary>
+        /// True when the cell holds its own floor-covering building (a wall, say), so the
+        /// cursor should point at that building and not through it at the level below.
+        ///
+        /// Issue #21. A wall stacked on a lower wall stands on AB_WallTop, and ShowsBelow is a
+        /// TERRAIN test, so the cell still reads as see-through with the wall standing in it.
+        /// Drawing copes (SectionLayer_ABBelowV2 prints lower levels a hair under the viewing
+        /// level), but pointing descended straight past the stacked wall: hover readouts,
+        /// targeting and right-click orders all landed on the wall below. Kept out of
+        /// ShowsBelow and TryResolveVisibleBelow on purpose: those are cached per terrain
+        /// version and shared by every renderer, while this is asked only at the pointer
+        /// entry points, a few times per frame at most.
+        /// </summary>
+        public static bool CoveredAt(Map map, IntVec3 cell)
+        {
+            if (map == null || !cell.InBounds(map))
+            {
+                return false;
+            }
+            Building edifice = map.edificeGrid[cell];
+            return edifice != null && edifice.def.coversFloor;
+        }
+
         public static bool InGutter(Map map, IntVec3 cell)
         {
             ABBandMap c = CompOf(map);

@@ -224,6 +224,10 @@ namespace AsAboveSoBelow
                 return false;
             }
             IntVec3 cell = IntVec3.FromVector3(clickPos);
+            if (ABBands.CoveredAt(map, cell))
+            {
+                return false; // a wall stacked here is the thing being clicked (#21)
+            }
             // THE shared see-below gate - the same one the renderer uses, which is what makes
             // "you can click what you can see" true by construction rather than by two
             // predicates being kept in step by hand. Descends as far as the view does, not

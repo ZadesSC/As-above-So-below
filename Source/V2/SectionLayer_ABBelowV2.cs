@@ -749,8 +749,8 @@ namespace AsAboveSoBelow
         ///
         /// ONE PASS, not two, and in this order. Scaling first means the pivot is the
         /// thing's real TrueCenter rather than a translated copy of it, so there is no
-        /// second place for the `- Slot` family of bugs to hide. Altitude (y) is untouched:
-        /// it is draw order in this mod, not height.
+        /// second place for the `- Slot` family of bugs to hide. Altitude (y) is draw order
+        /// in this mod, not height, and it is only nudged down by BelowAltitudeNudge.
         ///
         /// Tinting is still deliberately absent - the below view is lit by
         /// SectionLayer_ABBelowLighting from the surface's own glow, and an artificial dim
@@ -758,6 +758,20 @@ namespace AsAboveSoBelow
         /// distance cue that costs no brightness, which is why it came back and the tint
         /// did not.
         /// </summary>
+        /// <summary>
+        /// How far every print from a lower level sits below the same altitude on the
+        /// viewing level. Half of one AltInc: below its own layer's base, still far above
+        /// the next layer down (layers are ten AltInc apart).
+        ///
+        /// Issue #21. A wall stacked on a lower wall stands on AB_WallTop, which shows the
+        /// level below, so the lower wall is printed into the same cell at the same Building
+        /// altitude as the upper wall. Equal depth meant the two fought per pixel and the
+        /// lower wall usually won: the stacked wall vanished and its links read as the lower
+        /// wall's. Shifting every print by one constant keeps the order among lower-level
+        /// things exactly as it was and only breaks ties in favour of the viewing level.
+        /// </summary>
+        internal const float BelowAltitudeNudge = Altitudes.AltInc * 0.5f;
+
         private void FinishNewVerts(int drop, Vector3 centre, float shrink)
         {
             bool scaling = shrink < 0.999f;
@@ -774,7 +788,7 @@ namespace AsAboveSoBelow
                         v.x = centre.x + (v.x - centre.x) * shrink;
                         v.z = centre.z + (v.z - centre.z) * shrink;
                     }
-                    verts[j] = new Vector3(v.x, v.y, v.z + drop);
+                    verts[j] = new Vector3(v.x, v.y - BelowAltitudeNudge, v.z + drop);
                 }
             }
         }
