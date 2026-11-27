@@ -843,6 +843,30 @@ namespace AsAboveSoBelow
 
         private static bool mirroring;
 
+        /// <summary>True when the cell, or the cell under it on any lower level, holds a
+        /// thing bigger than one cell. A few thing-list reads per mirrored cell.</summary>
+        private static bool MultiCellThingInColumn(Map map, ABBandMap bands, IntVec3 loc, int fromBand)
+        {
+            for (int b = fromBand; b >= 0; b--)
+            {
+                IntVec3 c = b == fromBand ? loc : bands.Translate(loc, b);
+                if (!c.InBounds(map))
+                {
+                    continue;
+                }
+                System.Collections.Generic.List<Thing> things = map.thingGrid.ThingsListAtFast(c);
+                for (int i = 0; i < things.Count; i++)
+                {
+                    IntVec2 size = things[i].def.size;
+                    if (size.x > 1 || size.z > 1)
+                    {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
         private static void Postfix(MapDrawer __instance, IntVec3 loc, ulong dirtyFlags)
         {
             if (mirroring)
@@ -894,6 +918,12 @@ namespace AsAboveSoBelow
                 // "mineables disappear on floor 2" class), so ADD THE FLAG when adding a
                 // layer - the mirror is no longer flag-agnostic.
                 ulong mirrorFlag = (ulong)ABDefOf.AB_BelowThings;
+                // A change in this column (fog, terrain, a building) can move the print
+                // anchor of a multi-cell thing at or under it (IsPrintAnchor) to another
+                // footprint cell, possibly in a NEIGHBOURING section - which then keeps its
+                // old mesh and the thing vanishes until something else rebuilds it. Only
+                // then are adjacent sections dirtied too; ordinary columns stay one section.
+                bool adjacent = MultiCellThingInColumn(map, bands, loc, fromBand);
                 mirroring = true;
                 try
                 {
@@ -904,7 +934,15 @@ namespace AsAboveSoBelow
                         {
                             break; // nothing above a gutter column can look down it
                         }
-                        map.mapDrawer.MapMeshDirty(above, mirrorFlag);
+                        if (adjacent)
+                        {
+                            map.mapDrawer.MapMeshDirty(above, mirrorFlag, regenAdjacentCells: false,
+                                regenAdjacentSections: true);
+                        }
+                        else
+                        {
+                            map.mapDrawer.MapMeshDirty(above, mirrorFlag);
+                        }
                         steps++;
                         // ⚠ THE ASCENT RULE - the inverse of ABBands.TryResolveVisibleBelow,
                         // and it was missing here while the descent rule was being enforced

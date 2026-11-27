@@ -599,7 +599,8 @@ public sealed class StackedWalls : WallCase
             cell.GetEdifice(map)?.def == ThingDefOf.Wall && map.terrainGrid.TerrainAt(cell) == ABDefOf.AB_WallTop
             && ABBands.CoveredAt(map, cell)), new { cells = _stacked.Count });
 
-        // M: a 4x4 solar generator on open ground (x 102..105, z 40..43) whose first cell row-major is fogged.
+        // M: a 4x4 solar generator on open ground (x 102..105, z 40..43) whose first cell row-major is fogged
+        //   before anything is drawn.
         OpenGround(map, CellRect.FromLimits(98, 36, 107, 45));
         Build(map, DefDatabase<ThingDef>.GetNamed("SolarGenerator"), new IntVec3(103, 0, 41), null);
         var solarM = new IntVec3(103, 0, 41).GetFirstBuilding(map);
@@ -607,6 +608,16 @@ public sealed class StackedWalls : WallCase
             solarM != null && solarM.OccupiedRect() == CellRect.FromLimits(102, 40, 105, 43),
             new { rect = solarM?.OccupiedRect().ToString() });
         map.fogGrid.Refog(CellRect.SingleCell(new IntVec3(102, 0, 40)));
+
+        // N: a 4x4 solar generator (x 84..87, z 44..47) straddling the section boundary at x 84|85. Its first cell
+        // is fogged LIVE, after it has been drawn, so the print anchor moves into the next section, which must be
+        // rebuilt as well or the generator disappears.
+        OpenGround(map, CellRect.FromLimits(83, 43, 89, 48));
+        Build(map, DefDatabase<ThingDef>.GetNamed("SolarGenerator"), new IntVec3(85, 0, 45), null);
+        var solarN = new IntVec3(85, 0, 45).GetFirstBuilding(map);
+        c.Check("solar generator N covers x 84..87, z 44..47",
+            solarN != null && solarN.OccupiedRect() == CellRect.FromLimits(84, 44, 87, 47),
+            new { rect = solarN?.OccupiedRect().ToString() });
 
         var down = ThingMaker.MakeThing(DefDatabase<ThingDef>.GetNamed("AB2_StairsDown"), ThingDefOf.WoodLog);
         down.SetFaction(Faction.OfPlayer);
@@ -681,6 +692,24 @@ public sealed class StackedWalls : WallCase
             Shot("m-upper-solar-fogged-corner");
         });
         Step(() => ReadColours("m-upper-solar-fogged-corner"));
+        Step(() => View(new IntVec3(86, 0, 45 + Up), 6f));
+        Step(() =>
+        {
+            Mark("n-solar", new Vector3(86.5f, 0f, 45.5f + Up));
+            Shot("n-upper-before-fog");
+        });
+        Step(() => ReadColours("n-upper-before-fog"));
+        Step(() =>
+        {
+            c.Map.fogGrid.Refog(CellRect.SingleCell(new IntVec3(84, 0, 44)));
+            View(new IntVec3(86, 0, 45 + Up), 6f);
+        });
+        Step(() =>
+        {
+            Mark("n-solar-after", new Vector3(86.5f, 0f, 45.5f + Up));
+            Shot("n-upper-after-fog");
+        });
+        Step(() => ReadColours("n-upper-after-fog"));
         Step(() => View(new IntVec3(77, 0, 40 + Up), 6f));
         Step(() => Shot("i-upper-fire-smoke-turbine"));
         Step(() => View(new IntVec3(77, 0, 40), 6f));
@@ -696,6 +725,10 @@ public sealed class StackedWalls : WallCase
         ExpectWood("fog directly under a stacked wall is not drawn over it", "h-upper-fog", "h-wood-fogged-below");
         ExpectCool("a big building below is drawn when its first cell is fogged", "m-upper-solar-fogged-corner",
             "m-solar", 0.9f);
+        ExpectCool("a big building across a section boundary is drawn before its corner is fogged",
+            "n-upper-before-fog", "n-solar", 0.9f);
+        ExpectCool("a big building stays drawn when fogging its corner moves its anchor into the next section",
+            "n-upper-after-fog", "n-solar-after", 0.9f);
     }
 
     protected override void EachFrame(Context c)
@@ -716,7 +749,7 @@ public sealed class StackedWalls : WallCase
 
     protected override void Verify(Context c)
     {
-        c.Check("screenshots taken", Shots.Count == 9, new { shots = Shots });
+        c.Check("screenshots taken", Shots.Count == 11, new { shots = Shots });
         _legacyBeforeSave = c.Map.terrainGrid.TerrainAt(Legacy)?.defName;
         c.Event("legacy-before-save", new { terrain = _legacyBeforeSave });
     }
