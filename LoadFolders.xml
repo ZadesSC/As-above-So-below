@@ -1,11 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- The root entry is required. It provides the shared defs, textures and
-     languages. Each game version also loads its own assembly and patches. -->
+<!-- Load the shared assets and the RimWorld 1.7 assembly and patches. -->
 <loadFolders>
-  <v1.6>
-    <li>/</li>
-    <li>1.6</li>
-  </v1.6>
   <v1.7>
     <li>/</li>
     <li>1.7</li>

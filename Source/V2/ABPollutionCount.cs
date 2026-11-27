@@ -1,4 +1,3 @@
-#if RIMWORLD_17
 using System;
 using System.Runtime.CompilerServices;
 using HarmonyLib;
@@ -116,4 +115,3 @@ namespace AsAboveSoBelow
         }
     }
 }
-#endif

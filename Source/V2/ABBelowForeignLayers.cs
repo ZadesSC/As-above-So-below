@@ -1,10 +1,6 @@
 using System;
 using System.Collections.Generic;
-#if RIMWORLD_17
 using System.Runtime.CompilerServices;
-#else
-using System.Runtime.Serialization;
-#endif
 using HarmonyLib;
 using UnityEngine;
 using Verse;
@@ -227,11 +223,7 @@ internal static class ABBelowForeignLayers
         Section section2;
         try
         {
-#if RIMWORLD_17
             section2 = (Section)RuntimeHelpers.GetUninitializedObject(typeof(Section));
-#else
-            section2 = (Section)FormatterServices.GetUninitializedObject(typeof(Section));
-#endif
             section2.botLeft = new IntVec3(section.botLeft.x, 0, section.botLeft.z - drop);
             SectionMap(section2) = map;
         }

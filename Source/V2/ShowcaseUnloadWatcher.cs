@@ -1,4 +1,3 @@
-#if RIMWORLD_17
 #nullable enable annotations
 using UnityEngine;
 
@@ -16,4 +15,3 @@ public class ShowcaseUnloadWatcher : MonoBehaviour
         Showcase.WatcherDestroyed(this);
     }
 }
-#endif

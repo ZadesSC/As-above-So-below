@@ -119,15 +119,11 @@ public static class ABShamblerCrossLevel
 
         if (!flag)
         {
-#if RIMWORLD_17
             ABWormhole.TryGetTransit(map, pawn.Position, enemyTarget.Position, null, out near, out far, enemyTarget);
             if (near != null && !LetsThrough(near, far, pawn))
             {
                 return Drop(pawn, enemyTarget, ticksGame, out drop);
             }
-#else
-            ABWormhole.TryGetTransit(map, pawn.Position, enemyTarget.Position, null, out near, out _, enemyTarget);
-#endif
         }
 
         if (near == null || !near.Spawned || !ABBands.SameBand(map, pawn.Position, near.Position))

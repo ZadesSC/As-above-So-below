@@ -10,23 +10,8 @@ using Verse.AI;
 namespace AsAboveSoBelow
 {
     /// <summary>
-    /// V2 SPIKE - cross-band movement, done at the ONE place every pawn movement
-    /// funnels through.
-    ///
-    /// 1.6's pathfinder is jobified (PathFinderJob is an IJob over NativeArray, with a
-    /// NativePriorityQueue frontier), so A* neighbour expansion cannot be patched and
-    /// the wormhole is invisible to it. Reachability says "yes" but the pathfinder
-    /// would return NotFound -> PatherFailed -> job restart loop.
-    ///
-    /// The fix is to never ask the pathfinder to cross: segment the journey at
-    /// Pawn_PathFollower.StartPath into (leg to near anchor) -> (transit) -> (leg to
-    /// real destination). Both legs are ordinary intra-band paths.
-    ///
-    /// Why this single interception is the whole point of V2: EVERY job, every pawn,
-    /// every faction and every third-party JobDriver reaches movement through
-    /// StartPath. V1 needed ~130 patches because it had to widen each CONSUMER's idea
-    /// of "my map"; here the consumers are untouched and only the movement primitive
-    /// knows bands exist.
+    /// Executes crossings selected by native pathfinding. When native routing is unavailable,
+    /// StartPath splits a journey into same-floor walking legs joined by a crossing.
     /// </summary>
     public static class ABWormholePather
     {
@@ -1017,7 +1002,6 @@ namespace AsAboveSoBelow
             return found;
         }
 
-#if RIMWORLD_17
         internal static void CancelSupersededNativeCrossing(Pawn pawn, LocalTargetInfo destination, PathEndMode endMode)
         {
             if (pawn == null || !holding.TryGetValue(pawn.thingIDNumber, out Crossing crossing)
@@ -1046,7 +1030,6 @@ namespace AsAboveSoBelow
             });
         }
 
-#endif
 
         /// <summary>
         /// Either start the §78 hold - the pawn stays where it is and plays the entry clip -
@@ -1114,11 +1097,9 @@ namespace AsAboveSoBelow
                 value.job = pawn.CurJob;
                 value.realDest = t.realDest;
                 value.realPeMode = t.realPeMode;
-#if RIMWORLD_17
                 value.nativePortal = t.nativePortal;
                 if (t.nativePortal)
                     pawn.pather?.StopDead();
-#endif
                 holding[pawn.thingIDNumber] = value;
                 return true;
             }
@@ -1205,7 +1186,6 @@ namespace AsAboveSoBelow
             {
                 try
                 {
-#if RIMWORLD_17
                     Pawn pawn = crossing.pawn;
                     if (crossing.nativePortal)
                     {
@@ -1220,7 +1200,6 @@ namespace AsAboveSoBelow
                             continue;
                         }
                     }
-#endif
                     CarryNow(crossing.pawn, new Transit
                     {
                         near = crossing.near,
@@ -1246,7 +1225,6 @@ namespace AsAboveSoBelow
         /// straight from Carry (no clip) or from TickCrossings when the hold expires.</summary>
         private static void CarryNow(Pawn pawn, Transit t)
         {
-#if RIMWORLD_17
             if (t.nativePortal && !ABNativePortals.CanCarry(pawn, t.near, t.far))
             {
                 ABStairAnim.Clear(pawn);
@@ -1254,7 +1232,6 @@ namespace AsAboveSoBelow
                 ABNativePortals.Replan(pawn, t.realDest, t.realPeMode);
                 return;
             }
-#endif
             IntVec3 landing = LandingCell(pawn, t.far);
             if (!landing.IsValid)
             {
@@ -1611,7 +1588,6 @@ namespace AsAboveSoBelow
 
                     Pawn_PathFollower pather = transitRecord.pawn.pather;
                     Job curJob = transitRecord.pawn.CurJob;
-#if RIMWORLD_17
                     if (transitRecord.resumeJobId >= 0)
                     {
                         // An animated native crossing stops its pather. Resume the saved
@@ -1623,7 +1599,6 @@ namespace AsAboveSoBelow
                         }
                         continue;
                     }
-#endif
                     if (transitRecord.near == null || transitRecord.far == null
                         || !transitRecord.near.Spawned || !transitRecord.far.Spawned)
                         continue;
@@ -1633,14 +1608,12 @@ namespace AsAboveSoBelow
                         IntVec3 cell = pather.Destination.Cell;
                         if (cell == transitRecord.entryCell || cell == transitRecord.approachCell || transitRecord.near.OccupiedRect().Contains(cell))
                         {
-#if RIMWORLD_17
                             if (ABNativePortals.UsesNativeRouting(key))
                             {
                                 if (TryRestoreNativeLeg(key, transitRecord, pather.Destination))
                                     num++;
                                 continue;
                             }
-#endif
                             pending[transitRecord.pawn.thingIDNumber] = new Transit
                             {
                                 realDest = transitRecord.realDest,
@@ -1675,7 +1648,6 @@ namespace AsAboveSoBelow
             }
         }
 
-#if RIMWORLD_17
         private static readonly FieldInfo DriverToils = AccessTools.Field(typeof(JobDriver), "toils");
 
         private static bool TryRestoreNativeLeg(Map map, TransitRecord record, LocalTargetInfo leg)
@@ -1754,7 +1726,6 @@ namespace AsAboveSoBelow
             }
             return false;
         }
-#endif
 
         public static void QueueRestore(Map map, List<TransitRecord> records)
         {
@@ -1788,7 +1759,6 @@ namespace AsAboveSoBelow
             if (map == null)
                 return list;
 
-#if RIMWORLD_17
             foreach (Crossing crossing in holding.Values)
             {
                 Pawn pawn = crossing.pawn;
@@ -1805,7 +1775,6 @@ namespace AsAboveSoBelow
                     resumeJobId = crossing.job.loadID
                 });
             }
-#endif
             if (pending.Count == 0)
                 return list;
 
@@ -1877,9 +1846,7 @@ namespace AsAboveSoBelow
             public int startedTick;
             public int expiresAtTick;
             public int nearSinceTick;
-#if RIMWORLD_17
             public int resumeJobId = -1;
-#endif
             public void ExposeData()
             {
                 Scribe_References.Look(ref pawn, "pawn");
@@ -1893,9 +1860,7 @@ namespace AsAboveSoBelow
                 Scribe_Values.Look(ref startedTick, "startedTick", 0);
                 Scribe_Values.Look(ref expiresAtTick, "expiresAtTick", 0);
                 Scribe_Values.Look(ref nearSinceTick, "nearSinceTick", 0);
-#if RIMWORLD_17
                 Scribe_Values.Look(ref resumeJobId, "resumeJobId", -1);
-#endif
             }
         }
 
@@ -1916,14 +1881,12 @@ namespace AsAboveSoBelow
         {
             try
             {
-#if RIMWORLD_17
                 ABWormholePather.CancelSupersededNativeCrossing(___pawn, dest, peMode);
                 if (ABNativePortals.UsesNativeRouting(___pawn?.Map))
                 {
                     ABWormholePather.Clear(___pawn);
                     return;
                 }
-#endif
                 ABWormholePather.lastOutcome = ABWormholePather.SegmentOutcome.NotOurs;
                 ABWormholePather.TrySegment(___pawn, ref dest, ref peMode);
                 ABWormholePather.NoteIfDoomed(___pawn, dest);

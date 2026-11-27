@@ -96,7 +96,7 @@ Every one of these is optional. Nothing loads unless you already own the mod.
 [h1]✦ Requirements[/h1]
 [list]
 [*][b]Harmony[/b] (brrainz.harmony), the only dependency.
-[*][b]RimWorld 1.6.[/b]
+[*][b]RimWorld 1.7.[/b]
 [/list]
 
 [h1]✦ Not Compatible With[/h1]
@@ -106,7 +106,7 @@ Every one of these is optional. Nothing loads unless you already own the mod.
 [/list]
 
 [hr][/hr]
-[i]RimWorld 1.6. Open beta. Only new colonies get levels: adding this to an existing save is safe, but maps that already exist stay flat.[/i]
+[i]RimWorld 1.7. Open beta. Only new colonies get levels: adding this to an existing save is safe, but maps that already exist stay flat.[/i]
 
 [hr][/hr]
 
@@ -118,7 +118,6 @@ Every one of these is optional. Nothing loads unless you already own the mod.
 [*] [b]No Coffee:[/b] I will never ask for donations for AI created / assisted mods. I share these in the hopes they spark joy for someone, making AI generated content and then begging for money that could go to artists and people more deserving is NOT responsible AI usage.
 [/list]</description>
   <supportedVersions>
-    <li>1.6</li>
     <li>1.7</li>
   </supportedVersions>
   <modDependencies>

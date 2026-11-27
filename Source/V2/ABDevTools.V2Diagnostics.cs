@@ -15,9 +15,7 @@ namespace AsAboveSoBelow
 {
     public static partial class ABDevTools
     {
-#if RIMWORLD_17
         private static int probeSeenCalls;
-#endif
 
         [DebugAction("As above", "AB2: toggle cap corner fillers", false, false, false, false, false, 0, false, allowedGameStates = AllowedGameStates.PlayingOnMap)]
         private static void V2ToggleCapCornerFillers()
@@ -954,7 +952,6 @@ namespace AsAboveSoBelow
             return text + (map.roofGrid.Roofed(n) ? "*" : " ");
         }
 
-#if RIMWORLD_17
         [DebugAction("As above", "AB2: selection draw probe", false, false, false, false, false, 0, false, allowedGameStates = AllowedGameStates.PlayingOnMap)]
         private static void V2SelectionDrawProbe()
         {
@@ -1000,9 +997,7 @@ namespace AsAboveSoBelow
             Log.Warning(stringBuilder.ToString());
             Messages.Message("AB2: selection draw probe written to log.", MessageTypeDefOf.TaskCompletion, historical: false);
         }
-#endif
 
-#if RIMWORLD_17
         [DebugAction("As above", "AB2: check pollution count cache", false, false, false, false, false, 0, false, allowedGameStates = AllowedGameStates.PlayingOnMap)]
         private static void V2CheckPollutionCount()
         {
@@ -1018,6 +1013,5 @@ namespace AsAboveSoBelow
             Messages.Message("AB2: pollution count " + ((count == num2) ? "matches" : "MISMATCH") + ", see log.", (count == num2) ? MessageTypeDefOf.TaskCompletion : MessageTypeDefOf.RejectInput, historical: false);
         }
 
-#endif
     }
 }

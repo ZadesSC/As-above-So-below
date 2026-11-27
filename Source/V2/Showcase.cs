@@ -1,4 +1,3 @@
-#if RIMWORLD_17
 #nullable enable annotations
 using System;
 using System.Collections.Generic;
@@ -1508,4 +1507,3 @@ public static class Showcase
         RemoveWolf();
     }
 }
-#endif

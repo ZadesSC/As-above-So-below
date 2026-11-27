@@ -12,12 +12,11 @@ old tree. Work top to bottom; nothing here is optional.
 ## 1. Code state
 
 - [ ] Every window-5 item verified in game, or knowingly shipped unverified (record which).
-- [ ] **Fresh Release builds.** Build `Source/ModSource.csproj` once per version with
-      `-c Release -p:RimWorldVersion=<version> -p:RimWorldManagedDir=<managed directory>
-      -p:WorkshopDir=<local Workshop content directory>`. Outputs go to
-      `1.6/Assemblies/` and `1.7/Assemblies/`.
+- [ ] **Fresh Release build.** Build `Source/ModSource.csproj` with
+      `-c Release -p:RimWorldManagedDir=<1.7 managed directory>
+      -p:WorkshopDir=<local Workshop content directory>`. The output goes to `1.7/Assemblies/`.
 - [ ] Build is **0 warnings, 0 errors**.
-- [ ] Each versioned `Assemblies/` contains **only** `AsAboveSoBelow.dll`. No `.pdb`
+- [ ] `1.7/Assemblies/` contains **only** `AsAboveSoBelow.dll`. No `.pdb`
       (`DebugType=none` in the csproj already enforces this), no stray dlls.
 - [ ] **Never ship `0Harmony.dll`.** Harmony is a mod dependency, declared in About.xml.
 

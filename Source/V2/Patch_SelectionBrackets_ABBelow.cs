@@ -1,4 +1,3 @@
-#if RIMWORLD_17
 using System;
 using System.Collections.Generic;
 using System.Reflection;
@@ -148,4 +147,3 @@ public static class Patch_SelectionBrackets_ABBelow
         SelectionDrawerUtility.CalculateSelectionBracketPositionsWorld(bracketLocs, obj, worldPos, worldSize, selectTimes, textureSize, jumpDistanceFactor, deselectedJumpFactor);
     }
 }
-#endif
