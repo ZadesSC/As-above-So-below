@@ -25,7 +25,7 @@ Colonists cross levels on their own for hauling, construction, meals, rest, clea
 [*][b]Ladder[/b], one cell: cheap, cramped, traffic queues.
 [*][b]Staircase[/b], two by two: the baseline.
 [*][b]Grand staircase[/b], three by three: wide enough that colonists going up and down stop waiting for each other.
-[*][b]Elevator[/b], two by two: connects every level it reaches through one shaft, and colonists ride between any two directly.
+[*][b]Elevator[/b], two by two: existing shafts still connect their levels. New elevator construction is temporarily unavailable.
 [*][b]Placement tells you the truth[/b]: it shows the cells colonists can enter from and refuses spots that would jam.
 [/list]
 

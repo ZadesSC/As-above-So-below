@@ -85,6 +85,7 @@ namespace AsAboveSoBelow
             {
                 "AB2_LadderUp" or "AB2_LadderDown" => LadderEntry,
                 "AB2_StairsUp" or "AB2_StairsDown" => StairsEntry,
+                "AB2_GrandStairsUp" or "AB2_GrandStairsDown" => GrandEntry,
                 _ => 0
             };
             return ticks > 0;

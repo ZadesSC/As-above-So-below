@@ -813,8 +813,7 @@ namespace AsAboveSoBelow
         {
             IntVec3 landing = PickLandingCell(far);
             Map map = far.Map;
-            if (map == null || far.def.defName is not ("AB2_LadderUp" or "AB2_LadderDown"
-                or "AB2_StairsUp" or "AB2_StairsDown")
+            if (map == null || !ABStairAnim.TryPortalDelay(far, out _)
                 || !ABLinkApproach.TryGet(far, out ABApproach approach))
             {
                 return landing;
