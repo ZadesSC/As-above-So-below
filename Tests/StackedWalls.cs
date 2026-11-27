@@ -599,6 +599,15 @@ public sealed class StackedWalls : WallCase
             cell.GetEdifice(map)?.def == ThingDefOf.Wall && map.terrainGrid.TerrainAt(cell) == ABDefOf.AB_WallTop
             && ABBands.CoveredAt(map, cell)), new { cells = _stacked.Count });
 
+        // M: a 4x4 solar generator on open ground (x 102..105, z 40..43) whose first cell row-major is fogged.
+        OpenGround(map, CellRect.FromLimits(98, 36, 107, 45));
+        Build(map, DefDatabase<ThingDef>.GetNamed("SolarGenerator"), new IntVec3(103, 0, 41), null);
+        var solarM = new IntVec3(103, 0, 41).GetFirstBuilding(map);
+        c.Check("solar generator M covers x 102..105, z 40..43",
+            solarM != null && solarM.OccupiedRect() == CellRect.FromLimits(102, 40, 105, 43),
+            new { rect = solarM?.OccupiedRect().ToString() });
+        map.fogGrid.Refog(CellRect.SingleCell(new IntVec3(102, 0, 40)));
+
         var down = ThingMaker.MakeThing(DefDatabase<ThingDef>.GetNamed("AB2_StairsDown"), ThingDefOf.WoodLog);
         down.SetFaction(Faction.OfPlayer);
         _stairs = (Building_ABStairs2)GenSpawn.Spawn(down, StairCell, map, Rot4.North);
@@ -665,6 +674,13 @@ public sealed class StackedWalls : WallCase
             Shot("h-upper-fog");
         });
         Step(() => ReadColours("h-upper-fog"));
+        Step(() => View(new IntVec3(102, 0, 40 + Up), 6f));
+        Step(() =>
+        {
+            Mark("m-solar", new Vector3(104.5f, 0f, 42.5f + Up));
+            Shot("m-upper-solar-fogged-corner");
+        });
+        Step(() => ReadColours("m-upper-solar-fogged-corner"));
         Step(() => View(new IntVec3(77, 0, 40 + Up), 6f));
         Step(() => Shot("i-upper-fire-smoke-turbine"));
         Step(() => View(new IntVec3(77, 0, 40), 6f));
@@ -678,6 +694,8 @@ public sealed class StackedWalls : WallCase
             "g-granite");
         ExpectWood("fog below does not cover the body of a stacked wall", "h-upper-fog", "h-wood");
         ExpectWood("fog directly under a stacked wall is not drawn over it", "h-upper-fog", "h-wood-fogged-below");
+        ExpectCool("a big building below is drawn when its first cell is fogged", "m-upper-solar-fogged-corner",
+            "m-solar", 0.9f);
     }
 
     protected override void EachFrame(Context c)
@@ -698,7 +716,7 @@ public sealed class StackedWalls : WallCase
 
     protected override void Verify(Context c)
     {
-        c.Check("screenshots taken", Shots.Count == 8, new { shots = Shots });
+        c.Check("screenshots taken", Shots.Count == 9, new { shots = Shots });
         _legacyBeforeSave = c.Map.terrainGrid.TerrainAt(Legacy)?.defName;
         c.Event("legacy-before-save", new { terrain = _legacyBeforeSave });
     }
@@ -905,6 +923,24 @@ public sealed class StackedWallsThreeFloors : WallCase
         var solar = new IntVec3(40, 0, 24).GetFirstBuilding(map);
         c.Check("solar generator covers x 39..42, z 23..26", solar != null && solar.OccupiedRect() == solarRect,
             new { rect = solar?.OccupiedRect().ToString() });
+
+        // Only roof-holding buildings give a wall top: a 3x4 paste dispenser (impassable, but it holds no roof) on
+        // unroofed ground leaves open air above it, so no wall can be built on top of it.
+        var dispenserCell = new IntVec3(34, 0, 32);
+        foreach (var cell in CellRect.CenteredOn(dispenserCell, 3).Cells)
+        {
+            map.roofGrid.SetRoof(cell, null);
+            map.roofGrid.SetRoof(new IntVec3(cell.x, 0, cell.z + Up), null);
+        }
+
+        Build(map, DefDatabase<ThingDef>.GetNamed("NutrientPasteDispenser"), dispenserCell, null);
+        var dispenser = dispenserCell.GetFirstBuilding(map);
+        var overDispenser = dispenser == null ? new List<string>() : dispenser.OccupiedRect().Cells
+            .Select(cell => map.terrainGrid.TerrainAt(new IntVec3(cell.x, 0, cell.z + Up))?.defName).Distinct().ToList();
+        c.Check("the top of a machine is open air, not a wall top", dispenser != null
+            && overDispenser.Count == 1 && overDispenser[0] == "AB_OpenAir", new { overDispenser });
+        c.Check("the top of a wall is still a wall top",
+            map.terrainGrid.TerrainAt(new IntVec3(27, 0, 25 + Up)) == ABDefOf.AB_WallTop);
 
         Step(() => View(new IntVec3(30, 0, 25 + Up2), 6f));
         Step(() =>

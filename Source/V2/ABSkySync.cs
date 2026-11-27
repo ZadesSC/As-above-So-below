@@ -27,7 +27,8 @@ namespace AsAboveSoBelow
     /// THE RULE, in precedence order, applied to the cell one Slot above `below`:
     ///   1. constructed or thin rock roof below -> AB_RoofSurface (buildable AND walkable)
     ///   2. natural roof below        -> AB_MountainTop (mountain mass)
-    ///   3. impassable edifice below  -> AB_WallTop     (buildable, NOT walkable)
+    ///   3. roof-holding edifice below -> AB_WallTop    (buildable, NOT walkable): walls,
+    ///      doors, columns, natural rock - things a structure can stand on
     ///   4. otherwise                 -> AB_OpenAir
     ///
     /// ⚠ ROOF BEATS EDIFICE - BOTH KINDS OF ROOF. Getting that only half right is the
@@ -47,7 +48,7 @@ namespace AsAboveSoBelow
     ///   * that same mass silently stops being walkable;
     ///   * §24b's mass rendering has nothing left to draw.
     /// A roof is a continuous surface INCLUDING the walls it rests on, and a mountain is the
-    /// roof of its own rock. AB_WallTop is only for impassable things with NO roof over
+    /// roof of its own rock. AB_WallTop is only for roof-holding things with NO roof over
     /// them: a free-standing wall, or the outer ring of an unroofed compound.
     ///
     /// ⚠ ONLY DERIVED CELLS ARE TOUCHED. The sky band also holds generated mountain and
@@ -393,8 +394,14 @@ namespace AsAboveSoBelow
                 return ABDefOf.AB_MountainTop;
             }
 
+            // ⚠ ROOF-HOLDING ONLY, NOT EVERY IMPASSABLE BUILDING (#21 follow-up). Any
+            // impassable edifice used to qualify, so the top of a nutrient paste dispenser,
+            // a geothermal generator or a ship part became a wall top and a wall could be
+            // built on it. A wall top is the top of something a structure can stand on:
+            // walls, doors and columns (the column rule is the "tile above is the connector"
+            // design in AB2_Columns.xml) and natural rock all hold roof; machines do not.
             Building edifice = below.GetEdifice(map);
-            if (flag && edifice != null && edifice.def != null && (edifice.def.passability == Traversability.Impassable || edifice.def.holdsRoof))
+            if (flag && edifice != null && edifice.def != null && edifice.def.holdsRoof)
             {
                 return ABDefOf.AB_WallTop;
             }

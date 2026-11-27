@@ -732,8 +732,11 @@ namespace AsAboveSoBelow
                     // descent can stop earlier, on an opaque floor or on a wall stacked on an
                     // intermediate level (#21). Anchoring on such a cell printed nothing at
                     // all, hiding the whole building even where the rest of it is in view.
+                    // Unfogged too: Regenerate skips a view cell whose source is fogged before
+                    // it reaches the thing loop, so a fogged anchor would print nothing.
                     if (ABBands.TryResolveVisibleBelow(map, bands, above, out IntVec3 seen, out int seenDrop)
-                        && seen.x == q.x && seen.z == q.z && seenDrop == drop)
+                        && seen.x == q.x && seen.z == q.z && seenDrop == drop
+                        && !map.fogGrid.IsFogged(q))
                     {
                         return q.x == belowCell.x && q.z == belowCell.z;
                     }
