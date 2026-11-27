@@ -126,6 +126,8 @@ public static class RampTraffic
             return false;
         }
 
+        // The new path can take another ramp of the same traffic; conflicts after a rebuild are judged by its areas.
+        ticket.Group = edge.Group;
         if (TryAcquire(vehicle, in edge, Find.TickManager.TicksGame, inside: false))
         {
             return false;
@@ -284,7 +286,8 @@ public static class RampTraffic
             return false;
         }
 
-        if (!inside && !FirstInLine(vehicle, key, now))
+        // Vehicles already inside a mouth area wait in line too, so none can be passed over indefinitely.
+        if (!FirstInLine(vehicle, key, now))
         {
             return false;
         }
@@ -583,7 +586,7 @@ public static class RampTraffic
         public long Key { get; }
 
         /// <summary>The ramp direction the vehicle waits for; its mouth areas decide conflicts after a rebuild.</summary>
-        public RampGroup Group { get; }
+        public RampGroup Group { get; set; }
 
         public Map Map { get; }
 
