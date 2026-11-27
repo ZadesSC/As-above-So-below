@@ -74,6 +74,22 @@ public sealed class RampTable
 
     internal RampCrossings ForSize(IntVec2 size) => _bySize.GetValueOrDefault(size);
 
+    /// <summary>The traffic key this table gives a ramp pair, or false when the pair is not in the table.</summary>
+    public bool TryGetTrafficKey(long pairKey, out long trafficKey)
+    {
+        foreach (var group in Groups)
+        {
+            if (group.PairKey == pairKey)
+            {
+                trafficKey = group.TrafficKey;
+                return true;
+            }
+        }
+
+        trafficKey = 0;
+        return false;
+    }
+
     /// <summary>Main thread only.</summary>
     public int FloorOf(IntVec3 cell) => _bands == null ? -1 : _bands.BandOf(cell);
 

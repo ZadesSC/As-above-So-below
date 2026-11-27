@@ -221,6 +221,7 @@ public static class StartupBinding
             typeof(CoreLib.EntityRect.Enumerator));
         MemberBinding.RequireProperty(follower, "RequestStatus", typeof(VehiclePathFollower.PathRequestStatus), false);
         MemberBinding.RequireMethod(typeof(VehiclePath), "Peek", new[] { typeof(int) }, typeof(IntVec3));
+        MemberBinding.RequireProperty(typeof(VehiclePath), "LastNode", typeof(IntVec3), false);
         MemberBinding.RequireMethod(typeof(VehiclePath), "ConsumeNextNode", Type.EmptyTypes, typeof(IntVec3));
         MemberBinding.RequireProperty(typeof(Path), "NodesLeft", typeof(int), false);
 

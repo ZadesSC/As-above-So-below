@@ -135,7 +135,8 @@ public static class RampTraffic
     /// </summary>
     internal static bool YieldsTo(VehiclePawn blocker, VehiclePawn follower) =>
         s_tickets.Count > 0 && blocker != null && follower != null && s_tickets.TryGetValue(blocker, out var ticket)
-        && s_byHolder.TryGetValue(follower, out var claim) && claim.Key == ticket.Key;
+        && s_byHolder.TryGetValue(follower, out var claim)
+        && (claim.Key == ticket.Key || CurrentKey(claim, RampRegistry.FreshTable(claim.Map)) == ticket.Key);
 
     /// <summary>
     /// After each pather tick: drops the place in line of a vehicle that stopped waiting (an undrafted or reordered
@@ -235,15 +236,16 @@ public static class RampTraffic
 
         var approach = s_approaches.GetOrCreateValue(follower.vehicle);
         var left = path.NodesLeft;
-        // NodesLeft only falls while a path is followed. It grows when Vehicle Framework appends a queued order to
-        // the same path object, which can add a crossing to a path cached as having none.
-        if (!ReferenceEquals(approach.Path, path) || approach.TableVersion != table.Version || left > approach.LastLeft
+        // Vehicle Framework appends a queued order to the same path object, which can add a crossing to a path cached
+        // as having none. Following a path never changes its last node; appending to it does.
+        var last = path.LastNode;
+        if (!ReferenceEquals(approach.Path, path) || approach.TableVersion != table.Version || last != approach.LastNode
             || (approach.Found && left < approach.EntryNodesLeft))
         {
             approach.Scan(path, table, follower.vehicle.VehicleDef.size);
         }
 
-        approach.LastLeft = left;
+        approach.LastNode = last;
 
         edge = approach.Edge;
         return approach.Found;
@@ -268,7 +270,7 @@ public static class RampTraffic
             Release(current, reason);
         }
 
-        if (OverlappingClaimActive(vehicle, edge.Group, now))
+        if (ConflictingClaimActive(vehicle, edge.Group, key, now))
         {
             return false;
         }
@@ -300,11 +302,12 @@ public static class RampTraffic
     }
 
     /// <summary>
-    /// True while a claim under another key still covers this ramp's ground. Traffic keys come from the current
-    /// table; a rebuild (a ramp built, removed, forbidden or unforbidden nearby) can merge or split them while a
-    /// vehicle is still using the old key's ramp.
+    /// True while a claim granted under another key still belongs to this ramp's traffic. Traffic keys come from the
+    /// table at grant time; a rebuild (a ramp built, removed, forbidden or unforbidden nearby) can merge or split
+    /// them while a vehicle is still using its ramp. A claim conflicts when the current table gives the holder's
+    /// pair this key, or, for a pair no longer in the table, when its saved mouth areas touch this ramp's.
     /// </summary>
-    private static bool OverlappingClaimActive(VehiclePawn vehicle, RampGroup group, int now)
+    private static bool ConflictingClaimActive(VehiclePawn vehicle, RampGroup group, long key, int now)
     {
         if (s_claims.Count == 0)
         {
@@ -312,11 +315,13 @@ public static class RampTraffic
         }
 
         var map = vehicle.Map;
+        var table = RampRegistry.FreshTable(map);
         var active = false;
         s_scratch.Clear();
         foreach (var claim in s_claims.Values)
         {
-            if (claim.Holder == vehicle || claim.Map != map || !claim.Touches(group))
+            if (claim.Holder == vehicle || claim.Map != map
+                || (CurrentKey(claim, table) != key && !claim.Touches(group)))
             {
                 continue;
             }
@@ -342,6 +347,10 @@ public static class RampTraffic
         s_scratch.Clear();
         return active;
     }
+
+    /// <summary>The claim's traffic key in the current table, or its grant-time key when its pair is gone.</summary>
+    private static long CurrentKey(Claim claim, RampTable table) =>
+        table.TryGetTrafficKey(claim.PairKey, out var current) ? current : claim.Key;
 
     /// <summary>
     /// True when no live vehicle has waited longer for the same ramp. A vehicle not yet in line counts as joining
@@ -593,8 +602,8 @@ public static class RampTraffic
         public bool Found;
         public RampEdge Edge;
 
-        /// <summary>The path's nodes left at the previous lookup.</summary>
-        public int LastLeft;
+        /// <summary>The path's last node at the previous lookup.</summary>
+        public IntVec3 LastNode = IntVec3.Invalid;
 
         /// <summary>The path's nodes left when the vehicle stands on the crossing's entry cell.</summary>
         public int EntryNodesLeft;
