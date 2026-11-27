@@ -24,6 +24,8 @@ namespace AASBVehicleRamps;
 /// (<c>TryEnterNextPathCell</c>), which otherwise runs every tick because no cell cost is left: its path re-check and
 /// its run-over collision check would fire every tick instead of once per cell. The cell cost total is kept across the
 /// crossing so the next native collision check uses a real speed.</para>
+/// <para>Before a vehicle drives into a ramp's mouth area it takes that ramp's claim (<see cref="RampTraffic"/>);
+/// while another vehicle holds it, the same hold keeps the vehicle on its cell outside the area.</para>
 /// </summary>
 public static class CrossingPatch
 {
@@ -36,6 +38,7 @@ public static class CrossingPatch
         new ConditionalWeakTable<VehiclePawn, RefusalWindow>();
     private static readonly Dictionary<VehiclePawn, OccupancyWait> s_waits =
         new Dictionary<VehiclePawn, OccupancyWait>();
+    private static readonly List<VehiclePawn> s_expired = new List<VehiclePawn>();
 
     public static bool IsWaitingForOccupancy(VehiclePawn vehicle) => s_waits.ContainsKey(vehicle);
 
@@ -48,6 +51,11 @@ public static class CrossingPatch
     {
         var vehicle = __instance.vehicle;
         var now = Find.TickManager.TicksGame;
+        if (RampTraffic.IsHeld(__instance))
+        {
+            return false;
+        }
+
         if (s_waits.Count > 0 && s_waits.TryGetValue(vehicle, out var wait))
         {
             if (wait.Matches(__instance))
@@ -114,13 +122,22 @@ public static class CrossingPatch
 
     internal static void ClearWaits(Map map)
     {
+        // Collect first: removing while enumerating a Dictionary throws on RimWorld's runtime.
+        s_expired.Clear();
         foreach (var (vehicle, wait) in s_waits)
         {
             if (wait.Map == map)
             {
-                s_waits.Remove(vehicle);
+                s_expired.Add(vehicle);
             }
         }
+
+        foreach (var vehicle in s_expired)
+        {
+            s_waits.Remove(vehicle);
+        }
+
+        s_expired.Clear();
     }
 
     internal static void ClearAllWaits() => s_waits.Clear();
@@ -163,9 +180,18 @@ public static class CrossingPatch
         var map = vehicle?.Map;
         var position = vehicle?.Position ?? IntVec3.Invalid;
         var next = path.Peek(1);
-        if (map == null || next == position || next.AdjacentTo8Way(position))
+        if (map == null)
         {
             return true;
+        }
+
+        if (next == position || next.AdjacentTo8Way(position))
+        {
+            // An ordinary step. Stop here if it would enter the mouth area of a ramp another vehicle is using. A path
+            // that arrived after the vehicle moved on can still start with its current cell; Vehicle Framework then
+            // skips that node and moves to the one after it, so that is the cell to check.
+            var entering = next == position && path.NodesLeft >= 3 ? path.Peek(2) : next;
+            return !RampTraffic.ShouldHold(__instance, entering);
         }
 
         var ramps = RampRegistry.For(map);
@@ -377,6 +403,7 @@ public static class CrossingPatch
             map.pathing.RecalculatePerceivedPathCostAt(cell);
         }
 
+        RampTraffic.NotifyCrossed(vehicle, in edge);
         // Same arrival fog reveal AASB performs for pawns crossing a link.
         ABFogReveal.RevealArrival(vehicle, edge.Exit);
         ABBandView.FollowTransit(vehicle);

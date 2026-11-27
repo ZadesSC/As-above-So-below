@@ -17,6 +17,10 @@ namespace AASBVehicleRamps;
 /// look-ahead then answers NeedNew on every tick, re-planning the same crossing forever without reaching the
 /// crossing check. The single <c>DirectionToCell</c> call is replaced by <see cref="Direction"/>, which returns
 /// the ramp's exit rotation for a crossing and the native direction otherwise.
+/// <para>The look-ahead waits behind a vehicle that is moving and not waiting, and plans around one that is parked
+/// or waiting. A vehicle stopped in line for a ramp is still moving to Vehicle Framework, so the vehicle holding
+/// that ramp would wait for it forever after crossing towards it. The single <c>Waiting</c> read is replaced by
+/// <see cref="BlockerWaiting"/>, which also reports the queued vehicle as waiting to the ramp's holder only.</para>
 /// </summary>
 public static class LookAheadPatch
 {
@@ -34,7 +38,29 @@ public static class LookAheadPatch
             }
         }
 
-        return found == 1 ? null : "expected 1 DirectionToCell call in VehiclePathFollower.NeedNewPath, found " + found;
+        if (found != 1)
+        {
+            return "expected 1 DirectionToCell call in VehiclePathFollower.NeedNewPath, found " + found;
+        }
+
+        return FindWaitingAnchor(codes, out _);
+    }
+
+    /// <summary>Exactly one <c>VehiclePathFollower.Waiting</c> read; null on success.</summary>
+    public static string FindWaitingAnchor(List<CodeInstruction> codes, out int index)
+    {
+        index = -1;
+        var found = 0;
+        for (var i = 0; i < codes.Count; i++)
+        {
+            if (codes[i].Calls(NativeWaiting))
+            {
+                found++;
+                index = i;
+            }
+        }
+
+        return found == 1 ? null : "expected 1 Waiting read in VehiclePathFollower.NeedNewPath, found " + found;
     }
 
     public static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
@@ -52,8 +78,27 @@ public static class LookAheadPatch
         loadFollower.blocks.AddRange(codes[index].blocks);
         codes[index] = new CodeInstruction(OpCodes.Call, AccessTools.Method(typeof(LookAheadPatch), nameof(Direction)));
         codes.Insert(index, loadFollower);
+
+        // Stack before the read: the blocking vehicle's follower. Push this follower and call BlockerWaiting.
+        FindWaitingAnchor(codes, out var waiting);
+        var loadSelf = new CodeInstruction(OpCodes.Ldarg_0);
+        loadSelf.labels.AddRange(codes[waiting].labels);
+        loadSelf.blocks.AddRange(codes[waiting].blocks);
+        codes[waiting] = new CodeInstruction(OpCodes.Call,
+            AccessTools.Method(typeof(LookAheadPatch), nameof(BlockerWaiting)));
+        codes.Insert(waiting, loadSelf);
         return codes;
     }
+
+    public static MethodInfo NativeWaiting => AccessTools.PropertyGetter(typeof(VehiclePathFollower),
+        nameof(VehiclePathFollower.Waiting));
+
+    /// <summary>
+    /// <paramref name="blocker"/>'s native <c>Waiting</c>, or true when it is in line for the ramp that
+    /// <paramref name="follower"/>'s vehicle holds.
+    /// </summary>
+    public static bool BlockerWaiting(VehiclePathFollower blocker, VehiclePathFollower follower) =>
+        blocker.Waiting || RampTraffic.YieldsTo(blocker.vehicle, follower.vehicle);
 
     public static MethodInfo Native => AccessTools.Method(typeof(Ext_Map), nameof(Ext_Map.DirectionToCell),
         new[] { typeof(IntVec3), typeof(IntVec3) });

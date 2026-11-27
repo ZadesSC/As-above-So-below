@@ -186,9 +186,11 @@ public sealed class RampTable
 
         var upCenter = up.TrueCenter();
         var downCenter = down.TrueCenter();
-        groups.Add(new RampGroup(upMouth.outside, upMouth.outward, lowerFloor, upCenter,
+        // Building IDs survive table rebuilds and saves, so a claim keeps its ramp across a rebuild.
+        var pairKey = ((long)up.thingIDNumber << 32) | (uint)down.thingIDNumber;
+        groups.Add(new RampGroup(pairKey, upMouth.outside, upMouth.outward, lowerFloor, upCenter,
             downMouth.outside, downMouth.outward, upperFloor, downCenter, width, true));
-        groups.Add(new RampGroup(downMouth.outside, downMouth.outward, upperFloor, downCenter,
+        groups.Add(new RampGroup(pairKey, downMouth.outside, downMouth.outward, upperFloor, downCenter,
             upMouth.outside, upMouth.outward, lowerFloor, upCenter, width, false));
         Union(parent, lowerFloor, upperFloor);
     }
@@ -237,7 +239,84 @@ public sealed class RampTable
             edgeCount += edges.Count;
         }
 
+        AssignAprons(groups, crossings);
         return crossings;
+    }
+
+    /// <summary>
+    /// Sets each direction's mouth areas from the lanes of every vehicle size, then gives ramps whose mouth areas
+    /// overlap one traffic key, so one claim covers the shared ground.
+    /// </summary>
+    private static void AssignAprons(List<RampGroup> groups, Dictionary<IntVec2, RampCrossings> crossings)
+    {
+        var aprons = new Dictionary<IntVec3, CellRect>();
+        foreach (var bySize in crossings.Values)
+        {
+            foreach (ref readonly var edge in bySize.Edges)
+            {
+                Encapsulate(aprons, edge.Group.EntryMouth, edge.EntryLane);
+                Encapsulate(aprons, edge.Group.ExitMouth, edge.ExitLane);
+            }
+        }
+
+        foreach (var group in groups)
+        {
+            group.EntryApron = aprons.GetValueOrDefault(group.EntryMouth, CellRect.Empty);
+            group.ExitApron = aprons.GetValueOrDefault(group.ExitMouth, CellRect.Empty);
+        }
+
+        // Groups come in direction pairs and share their pair key; join different pairs whose areas overlap. The
+        // smallest pair key in each joined set is its traffic key, so the result does not depend on list order.
+        var changed = true;
+        while (changed)
+        {
+            changed = false;
+            for (var i = 0; i < groups.Count; i++)
+            {
+                for (var j = i + 1; j < groups.Count; j++)
+                {
+                    var a = groups[i];
+                    var b = groups[j];
+                    if (a.TrafficKey == b.TrafficKey || !SharesGround(a, b))
+                    {
+                        continue;
+                    }
+
+                    var key = Math.Min(a.TrafficKey, b.TrafficKey);
+                    var replaced = Math.Max(a.TrafficKey, b.TrafficKey);
+                    foreach (var group in groups)
+                    {
+                        if (group.TrafficKey == replaced)
+                        {
+                            group.TrafficKey = key;
+                        }
+                    }
+
+                    changed = true;
+                }
+            }
+        }
+    }
+
+    private static bool SharesGround(RampGroup a, RampGroup b) =>
+        Touches(a.EntryApron, b.EntryApron) || Touches(a.EntryApron, b.ExitApron)
+        || Touches(a.ExitApron, b.EntryApron) || Touches(a.ExitApron, b.ExitApron);
+
+    private static bool Touches(CellRect a, CellRect b) => a.Area > 0 && b.Area > 0 && a.Overlaps(b);
+
+    private static void Encapsulate(Dictionary<IntVec3, CellRect> aprons, IntVec3 mouth, CellRect lane)
+    {
+        if (!aprons.TryGetValue(mouth, out var apron))
+        {
+            aprons[mouth] = lane;
+            return;
+        }
+
+        var minX = Math.Min(apron.minX, lane.minX);
+        var minZ = Math.Min(apron.minZ, lane.minZ);
+        var maxX = Math.Max(apron.maxX, lane.maxX);
+        var maxZ = Math.Max(apron.maxZ, lane.maxZ);
+        aprons[mouth] = new CellRect(minX, minZ, maxX - minX + 1, maxZ - minZ + 1);
     }
 
     private static bool OnFloor(CellRect lane, int floor, int mapWidth, int[] floorByRow)

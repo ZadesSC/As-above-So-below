@@ -6,9 +6,12 @@ namespace AASBVehicleRamps;
 /// <summary>The two mouths of a paired ramp, in one travel direction.</summary>
 public sealed class RampGroup
 {
-    internal RampGroup(IntVec3 entryMouth, IntVec3 entryOutward, int fromFloor, Vector3 entryRampCenter,
-        IntVec3 exitMouth, IntVec3 exitOutward, int toFloor, Vector3 exitRampCenter, int rampWidth, bool climbs)
+    internal RampGroup(long pairKey, IntVec3 entryMouth, IntVec3 entryOutward, int fromFloor,
+        Vector3 entryRampCenter, IntVec3 exitMouth, IntVec3 exitOutward, int toFloor, Vector3 exitRampCenter,
+        int rampWidth, bool climbs)
     {
+        PairKey = pairKey;
+        TrafficKey = pairKey;
         EntryMouth = entryMouth;
         EntryOutward = entryOutward;
         FromFloor = fromFloor;
@@ -20,6 +23,24 @@ public sealed class RampGroup
         RampWidth = rampWidth;
         Climbs = climbs;
     }
+
+    /// <summary>Identifies the physical ramp pair; both travel directions share it.</summary>
+    public long PairKey { get; }
+
+    /// <summary>
+    /// The ramp claim this direction uses (<see cref="RampTraffic"/>). Pairs whose mouth areas overlap share one key,
+    /// so only one vehicle at a time drives into the shared area.
+    /// </summary>
+    public long TrafficKey { get; internal set; }
+
+    /// <summary>
+    /// Every cell a vehicle of any size uses at the entry mouth: the union of the entry lanes of this direction and
+    /// the exit lanes of the reverse direction. Empty when no vehicle size fits the ramp.
+    /// </summary>
+    public CellRect EntryApron { get; internal set; }
+
+    /// <summary>The same area at the exit mouth.</summary>
+    public CellRect ExitApron { get; internal set; }
 
     public IntVec3 EntryMouth { get; }
 
