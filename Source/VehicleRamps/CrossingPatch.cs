@@ -179,6 +179,14 @@ public static class CrossingPatch
         var vehicle = __instance.vehicle;
         var map = vehicle?.Map;
         var position = vehicle?.Position ?? IntVec3.Invalid;
+        if (path.NodesLeft >= 3 && path.Peek(1) == position)
+        {
+            // A path that arrived after the vehicle moved on can start with its current cell. Vehicle Framework would
+            // skip that node and move straight to the one after it, which may be a ramp jump that then bypasses the
+            // crossing checks below. Skip it here so the real next node is classified.
+            path.ConsumeNextNode();
+        }
+
         var next = path.Peek(1);
         if (map == null)
         {
@@ -187,11 +195,8 @@ public static class CrossingPatch
 
         if (next == position || next.AdjacentTo8Way(position))
         {
-            // An ordinary step. Stop here if it would enter the mouth area of a ramp another vehicle is using. A path
-            // that arrived after the vehicle moved on can still start with its current cell; Vehicle Framework then
-            // skips that node and moves to the one after it, so that is the cell to check.
-            var entering = next == position && path.NodesLeft >= 3 ? path.Peek(2) : next;
-            return !RampTraffic.ShouldHold(__instance, entering);
+            // An ordinary step. Stop here if it would enter the mouth area of a ramp another vehicle is using.
+            return !RampTraffic.ShouldHold(__instance, next);
         }
 
         var ramps = RampRegistry.For(map);

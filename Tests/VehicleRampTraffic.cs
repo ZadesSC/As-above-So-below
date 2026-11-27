@@ -90,18 +90,26 @@ public abstract class RampTrafficCase : RampCase
             return;
         }
 
-        foreach (var group in Table.Groups)
+        // One claim covers every mouth area with the same traffic key, so count distinct vehicles across all of
+        // them. A vehicle counts when either RimWorld's thing-grid rectangle or Vehicle Framework's own claim (its
+        // eight-way footprint) reaches the area.
+        var positions = c.Map.GetDetachedMapComponent<VehiclePositionManager>();
+        foreach (var traffic in Table.Groups.GroupBy(g => g.TrafficKey))
         {
-            var apron = group.EntryApron;
-            var inside = _fleet.Where(v => v.Spawned && apron.Area > 0 && v.OccupiedRect().Overlaps(apron)).ToArray();
+            var aprons = traffic.SelectMany(g => new[] { g.EntryApron, g.ExitApron }).Where(a => a.Area > 0)
+                .Distinct().ToArray();
+            var inside = _fleet.Where(v => v.Spawned && aprons.Any(a => Touches(positions, v, a))).ToArray();
             if (inside.Length > 1)
             {
-                _sharedMouth = $"tick {c.Tick}: mouth {apron} holds " + string.Join("; ", inside.Select(State));
+                _sharedMouth = $"tick {c.Tick}: ramp {traffic.Key} mouths hold " + string.Join("; ", inside.Select(State));
                 c.Event("shared-mouth", new { info = _sharedMouth });
                 return;
             }
         }
     }
+
+    private static bool Touches(VehiclePositionManager positions, VehiclePawn vehicle, CellRect area) =>
+        vehicle.OccupiedRect().Overlaps(area) || area.Cells.Any(cell => positions.ClaimedBy(cell) == vehicle);
 
     protected void CheckCleanTraffic(Context c, int expectedCrossings)
     {
@@ -143,9 +151,11 @@ public sealed class RampTrafficPair : RampTrafficCase
         Step(ctx =>
         {
             CheckCleanTraffic(ctx, 2);
-            ctx.Check("the second vehicle waited for the ramp", RampDiagnostics.ClaimsGranted >= 2
-                && RampDiagnostics.ClaimHolds >= 1, new { granted = RampDiagnostics.ClaimsGranted,
-                    holds = RampDiagnostics.ClaimHolds });
+            ctx.Check("each vehicle took the ramp", RampDiagnostics.ClaimsGranted >= 2,
+                new { granted = RampDiagnostics.ClaimsGranted });
+            // Whether the second vehicle reaches the mouth before the first leaves depends on Vehicle Framework's
+            // path timing; ramps.traffic-cleanup and ramps.traffic-waiter-cancel require a vehicle in line.
+            ctx.Event("pair-queue", new { holds = RampDiagnostics.ClaimHolds });
             return true;
         });
     }
@@ -249,6 +259,70 @@ public sealed class RampTrafficOpposedQueued : RampTrafficCase
                 new { holds = RampDiagnostics.ClaimHolds, events = RampDiagnostics.Events });
             ctx.Check("each vehicle ended on the other floor", FloorOf(climber.Position) == 1
                 && FloorOf(descender.Position) == 0, new { states = Fleet.Select(State).ToArray() });
+            return true;
+        });
+    }
+}
+
+public sealed class RampTrafficWaiterCancel : RampTrafficCase
+{
+    public override string Id => "ramps.traffic-waiter-cancel";
+
+    public override string Intent => "Undrafting a vehicle waiting in line drops it from the line at once";
+
+    protected override void Arrange(Context c)
+    {
+        SpawnRamp("AB2_VehicleRampDown", UpperA, Rot4.North);
+        var first = Enlist(SpawnVehicle(MainVehicle, new IntVec3(50, 0, 40), Rot4.West));
+        var second = Enlist(SpawnVehicle(MainVehicle, new IntVec3(50, 0, 48), Rot4.West));
+        var goals = new[] { new IntVec3(57, 0, 83), new IntVec3(69, 0, 86) };
+        VehiclePawn holder = null;
+        VehiclePawn waiter = null;
+        var cancelTick = -1;
+        var ordered = false;
+        Step(Wait(90));
+        Step(ctx =>
+        {
+            WatchTraffic(ctx);
+            if (!ordered)
+            {
+                ordered = true;
+                ctx.Check("both orders accepted", Order(first, goals[0]) && Order(second, goals[1]));
+                return false;
+            }
+
+            if (waiter == null)
+            {
+                var claimed = Fleet.FirstOrDefault(RampTraffic.IsHolder);
+                var queued = Fleet.FirstOrDefault(RampTraffic.IsQueued);
+                if (claimed == null || queued == null)
+                {
+                    return false;
+                }
+
+                holder = claimed;
+                waiter = queued;
+                waiter.ignition.Drafted = false;
+                cancelTick = ctx.Tick;
+                ctx.Event("waiter-undrafted", new { holder = State(holder), waiter = State(waiter), tick = ctx.Tick });
+                return false;
+            }
+
+            if (ctx.Tick - cancelTick == 5)
+            {
+                ctx.Check("the undrafted vehicle left the line within a few ticks", !RampTraffic.IsQueued(waiter)
+                    && RampTraffic.TicketCount == 0 && RampTraffic.IsHolder(holder),
+                    new { tickets = RampTraffic.TicketCount, waiter = State(waiter) });
+            }
+
+            return ctx.Tick - cancelTick > 5 && holder.Position == goals[holder == first ? 0 : 1]
+                && !holder.vehiclePather.Moving;
+        });
+        Step(ctx =>
+        {
+            ctx.Check("the holder crossed and nothing is left in the ramp tables", RampDiagnostics.Crossings == 1
+                && RampDiagnostics.JumpFailures == 0 && FloorOf(waiter.Position) == 0 && RampTraffic.ClaimCount == 0
+                && RampTraffic.TicketCount == 0, new { events = RampDiagnostics.Events });
             return true;
         });
     }

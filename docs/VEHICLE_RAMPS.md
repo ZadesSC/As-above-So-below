@@ -70,8 +70,9 @@ multi-floor routing, reachability, animation, and save/reload.
 
 | Case | Checks |
 | --- | --- |
-| `ramps.traffic-pair` | Two MRAPs ordered on the same tick both climb. One waits in line. No refusals, never two vehicles in one mouth area, no claim left |
+| `ramps.traffic-pair` | Two MRAPs ordered on the same tick both climb. No refusals, never two vehicles in the mouth areas of one ramp, no claim left. Whether one has to wait depends on path timing |
 | `ramps.traffic-trio` | Two MRAPs and a CV90 ordered together climb in turn |
 | `ramps.traffic-opposed` | One vehicle climbs while another descends, ordered on the same tick. Both swap floors |
 | `ramps.traffic-opposed-queued` | The descent is ordered once the climber holds the ramp. The descender waits outside the upper mouth and the climber drives around it |
+| `ramps.traffic-waiter-cancel` | Undrafting the vehicle waiting in line drops it from the line within a few ticks. The holder crosses and nothing is left behind |
 | `ramps.traffic-cleanup` | Undrafting the vehicle holding the ramp hands it to the waiting vehicle, which crosses |
