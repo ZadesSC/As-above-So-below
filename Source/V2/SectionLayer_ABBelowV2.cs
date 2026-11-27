@@ -128,6 +128,10 @@ namespace AsAboveSoBelow
                     }
 
                     bool hasVisibleCell = ABBands.TryResolveVisibleBelow(map, bands, viewCell, out var below, out var drop);
+                    // A wall stacked in this cell (#21) is drawn over whatever is printed here,
+                    // except fog, which sits at FogOfWar altitude: never mirror the level
+                    // below's fog onto it. Its own level's fog is vanilla's to draw.
+                    bool coveredHere = ABBands.CoveredAt(map, viewCell);
                     bool belowIsFogged = hasVisibleCell && fogGrid.IsFogged(below);
                     if (!hasVisibleCell | belowIsFogged)
                     {
@@ -141,7 +145,7 @@ namespace AsAboveSoBelow
                             AddQuad(GetSubMesh(AirMaskMat), viewCell, maskAltitude, OpaqueWhite);
                         }
 
-                        if (belowIsFogged)
+                        if (belowIsFogged && !coveredHere)
                         {
                             EmitBelowFogFan(map, bands, fogGrid, below, viewCell, fogAltitude);
                             if (slot > 0 && drop > slot)
@@ -174,7 +178,7 @@ namespace AsAboveSoBelow
                     }
 
                     hasGeometry = true;
-                    if (ABV2Debug.DrawBelowAirMask)
+                    if (ABV2Debug.DrawBelowAirMask && !coveredHere)
                     {
                         EmitBelowFogFan(map, bands, fogGrid, below, viewCell, fogAltitude);
                     }
@@ -703,8 +707,8 @@ namespace AsAboveSoBelow
         }
 
         /// <summary>Multi-cell things print exactly once, from the first occupied cell
-        /// (row-major) that has open air above it - not from the root cell, which may sit
-        /// under a rooftop while the rest of the body is exposed.</summary>
+        /// (row-major) that is actually seen from the viewing level - not from the root cell,
+        /// which may sit under a rooftop while the rest of the body is exposed.</summary>
         private static bool IsPrintAnchor(Thing t, IntVec3 belowCell, Map map, ABBandMap bands,
             TerrainGrid terrainGrid, TerrainDef air, int drop)
         {
@@ -723,7 +727,13 @@ namespace AsAboveSoBelow
                     {
                         continue;
                     }
-                    if (ABBands.ShowsBelow(terrainGrid.TerrainAt(above)))
+                    // The first cell whose view column actually LANDS on this footprint cell -
+                    // not merely the first with see-through terrain above it, because the
+                    // descent can stop earlier, on an opaque floor or on a wall stacked on an
+                    // intermediate level (#21). Anchoring on such a cell printed nothing at
+                    // all, hiding the whole building even where the rest of it is in view.
+                    if (ABBands.TryResolveVisibleBelow(map, bands, above, out IntVec3 seen, out int seenDrop)
+                        && seen.x == q.x && seen.z == q.z && seenDrop == drop)
                     {
                         return q.x == belowCell.x && q.z == belowCell.z;
                     }

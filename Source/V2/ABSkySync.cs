@@ -192,6 +192,24 @@ namespace AsAboveSoBelow
             return map.roofGrid.RoofAt(target) != null || target.GetEdifice(map) != null;
         }
 
+        /// <summary>
+        /// A wall (any floor-covering building) left standing on AB_OpenAir, which no player
+        /// action can produce: saves written under the old load order (#21) hold stacked
+        /// walls like that. SyncAbove re-derives such a cell despite CarriesOwnStructure,
+        /// because re-deriving can only give it ground back, never take any away.
+        ///
+        /// ⚠ NOT LINKS. A stair or ramp footprint on open air has its own repair
+        /// (RepairAfterLoad restores it to AB_RoofSurface). Re-deriving it here first would
+        /// resolve it from the link below - an unroofed door that holds roof, so AB_WallTop,
+        /// which is impassable - and the landing repair, which only touches open air, would
+        /// then leave the staircase standing on ground nobody can walk on.
+        /// </summary>
+        private static bool StrandedWall(Map map, IntVec3 target, TerrainDef current)
+        {
+            return current == ABDefOf.AB_OpenAir && ABBands.CoveredAt(map, target)
+                && !(target.GetEdifice(map) is Building_ABStairs2);
+        }
+
         // ⚠ THE PROTECTED LANDING APRON IS GONE. THIRD AND FINAL SHRINK, AND THE REASON
         // IS THAT EVERY VERSION OF IT PRODUCED THE SAME FIELD REPORT.
         //
@@ -309,15 +327,10 @@ namespace AsAboveSoBelow
             {
                 return; // generated summit, or a floor laid on ground that is not ours
             }
-            if (CarriesOwnStructure(map, target)
-                && !(current == ABDefOf.AB_OpenAir && target.GetEdifice(map) != null))
+            if (CarriesOwnStructure(map, target) && !StrandedWall(map, target, current))
             {
                 return; // the band's own mass, a built structure, or a link footprint
             }
-            // ...except a building standing on AB_OpenAir, which can never be right: saves
-            // touched by the old load order (#21) hold stacked walls on open air. Re-deriving
-            // can only give it solid ground back (or leave it), never take any away, so the
-            // "never pull ground out from under a structure" rule is not at stake.
             TerrainDef want = Resolve(map, below);
             if (want == null || want == current)
             {
@@ -452,7 +465,11 @@ namespace AsAboveSoBelow
                     + " (generated summit, or a floor laid on ground that is not ours)")
                     .ToString();
             }
-            if (CarriesOwnStructure(map, target))
+            if (StrandedWall(map, target, current))
+            {
+                sb.Append(" (wall standing on open air: re-derived despite its structure)");
+            }
+            else if (CarriesOwnStructure(map, target))
             {
                 return sb.Append(" -> STOP: target carries its own structure (roof=")
                     .Append(map.roofGrid.RoofAt(target)?.defName ?? "none")

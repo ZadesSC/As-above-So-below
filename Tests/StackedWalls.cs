@@ -215,6 +215,14 @@ public abstract class WallCase : Rwtf.Scenario
     protected void ExpectWood(string label, string shot, string warm, float minRatio = 1.6f) =>
         _warmChecks.Add((label, shot, warm, minRatio));
 
+    private readonly List<(string label, string shot, string mark, float maxRatio)> _coolChecks =
+        new List<(string, string, string, float)>();
+
+    /// <summary>Require the sample at <paramref name="mark"/> to read blue-ish (red/blue at most
+    /// <paramref name="maxRatio"/>), e.g. a solar panel rather than the grey floor or sand around it.</summary>
+    protected void ExpectCool(string label, string shot, string mark, float maxRatio) =>
+        _coolChecks.Add((label, shot, mark, maxRatio));
+
     protected void ReadColours(string shot)
     {
         var path = ShotPath(shot);
@@ -246,6 +254,13 @@ public abstract class WallCase : Rwtf.Scenario
                 Ctx.Event("colours", new { check.label, warm, reference });
             }
 
+            foreach (var check in _coolChecks.Where(x => x.shot == shot))
+            {
+                var ratio = Ratio(check.mark);
+                _colourResults[check.label] = ratio <= check.maxRatio ? "ok" : $"{check.mark} {ratio:F2}";
+                Ctx.Event("colours", new { check.label, ratio });
+            }
+
             foreach (var check in _warmChecks.Where(x => x.shot == shot))
             {
                 var warm = Ratio(check.warm);
@@ -261,7 +276,8 @@ public abstract class WallCase : Rwtf.Scenario
 
     protected void CheckColours(Context c)
     {
-        foreach (var label in _colourChecks.Select(x => x.label).Concat(_warmChecks.Select(x => x.label)))
+        foreach (var label in _colourChecks.Select(x => x.label).Concat(_warmChecks.Select(x => x.label))
+                     .Concat(_coolChecks.Select(x => x.label)))
         {
             c.Check(label, _colourResults.TryGetValue(label, out var r) && r == "ok",
                 new { result = _colourResults.TryGetValue(label, out var v) ? v : "screenshot missing" });
@@ -437,6 +453,8 @@ public sealed class StackedWalls : WallCase
     private readonly List<IntVec3> _floored = new List<IntVec3>();
     private static readonly IntVec3 Legacy = new IntVec3(108, 0, 25 + Up);
     private string _legacyBeforeSave;
+    private static readonly IntVec3 StairCell = new IntVec3(42, 0, 42 + Up);
+    private Building_ABStairs2 _stairs;
 
     public override string Id => "walls.stacked";
 
@@ -454,7 +472,10 @@ public sealed class StackedWalls : WallCase
     // G x 20..34 z 33..48 (open ground): lower granite run z 40 x 22..32, wood stacked on x 22..28; deep snow below,
     //   an oak at (27,39) and a torch at (31,41).
     // H x 50..64 z 33..48 (open ground): lower steel run z 40 x 52..62, wood stacked on all; lower cells north of
-    //   the wall fogged.
+    //   the wall fogged, and the lower wall cells themselves fogged under x 52..56.
+    // L (42,106): a staircase down on the upper floor with its lower counterpart unroofed, its upper footprint
+    //   forced to open air as an old broken save might hold it. Load must give it walkable rooftop back, not an
+    //   impassable wall top.
     // I x 70..84 z 33..48 (open ground): lower granite run z 40 x 72..82, wood stacked on all; a lit campfire at
     //   (74,39), a wind turbine at (77,37), and smoke, sparks and fire glow thrown every frame at (78,41).
     protected override void Arrange(Context c)
@@ -558,6 +579,8 @@ public sealed class StackedWalls : WallCase
         }
 
         map.fogGrid.Refog(CellRect.FromLimits(50, 41, 64, 48));
+        // And the lower wall cells themselves under x 52..56: fog directly beneath a stacked wall.
+        map.fogGrid.Refog(CellRect.FromLimits(52, 40, 56, 40));
 
         OpenGround(map, CellRect.FromLimits(70, 33, 84, 48));
         for (var x = 72; x <= 82; x++)
@@ -576,6 +599,19 @@ public sealed class StackedWalls : WallCase
             cell.GetEdifice(map)?.def == ThingDefOf.Wall && map.terrainGrid.TerrainAt(cell) == ABDefOf.AB_WallTop
             && ABBands.CoveredAt(map, cell)), new { cells = _stacked.Count });
 
+        var down = ThingMaker.MakeThing(DefDatabase<ThingDef>.GetNamed("AB2_StairsDown"), ThingDefOf.WoodLog);
+        down.SetFaction(Faction.OfPlayer);
+        _stairs = (Building_ABStairs2)GenSpawn.Spawn(down, StairCell, map, Rot4.North);
+        var lowerLink = _stairs.Counterparts.FirstOrDefault(x => x != null && x.Spawned);
+        c.Check("staircase pair spawned", lowerLink != null, new { stairs = _stairs.Position.ToString() });
+        if (lowerLink != null)
+        {
+            foreach (var cell in lowerLink.OccupiedRect())
+            {
+                map.roofGrid.SetRoof(cell, null);
+            }
+        }
+
         // Last: a stacked wall on open air, as saved by builds before the load fix. Written with sync suspended so
         // nothing repairs it before the runner's save; AfterReload expects the wall top back.
         var sync = AccessTools.Field(typeof(ABSkySync), "Suspended");
@@ -583,6 +619,10 @@ public sealed class StackedWalls : WallCase
         try
         {
             map.terrainGrid.SetTerrain(Legacy, ABDefOf.AB_OpenAir);
+            foreach (var cell in _stairs.OccupiedRect())
+            {
+                map.terrainGrid.SetTerrain(cell, ABDefOf.AB_OpenAir);
+            }
         }
         finally
         {
@@ -620,7 +660,8 @@ public sealed class StackedWalls : WallCase
         Step(() => View(new IntVec3(57, 0, 40 + Up), 6f));
         Step(() =>
         {
-            Mark("h-wood", new Vector3(55.5f, 0f, 40.3f + Up));
+            Mark("h-wood", new Vector3(60.5f, 0f, 40.3f + Up));
+            Mark("h-wood-fogged-below", new IntVec3(54, 0, 40 + Up).ToVector3Shifted());
             Shot("h-upper-fog");
         });
         Step(() => ReadColours("h-upper-fog"));
@@ -636,6 +677,7 @@ public sealed class StackedWalls : WallCase
         ExpectWoodAgainst("snow below does not cover a stacked wall", "g-upper-snow-tree-torch", "g-wood",
             "g-granite");
         ExpectWood("fog below does not cover the body of a stacked wall", "h-upper-fog", "h-wood");
+        ExpectWood("fog directly under a stacked wall is not drawn over it", "h-upper-fog", "h-wood-fogged-below");
     }
 
     protected override void EachFrame(Context c)
@@ -673,6 +715,12 @@ public sealed class StackedWalls : WallCase
                 || map.terrainGrid.UnderTerrainAt(cell) != ABDefOf.AB_WallTop)
             .Select(cell => cell + " " + map.terrainGrid.TerrainAt(cell)?.defName).ToList();
         c.Check("floors on empty wall tops survive reload", lostFloors.Count == 0, new { lostFloors });
+        var stairs = map.listerThings.AllThings.OfType<Building_ABStairs2>()
+            .FirstOrDefault(x => x.Position == StairCell);
+        var footprint = stairs == null ? new List<string>() : stairs.OccupiedRect().Cells
+            .Select(cell => map.terrainGrid.TerrainAt(cell)?.defName).ToList();
+        c.Check("a staircase saved on open air gets walkable rooftop back, not a wall top",
+            stairs != null && footprint.All(t => t == "AB_RoofSurface"), new { footprint });
         c.Check("a stacked wall saved on open air gets its wall top back on load",
             map.terrainGrid.TerrainAt(Legacy) == ABDefOf.AB_WallTop && Legacy.GetEdifice(map)?.def == ThingDefOf.Wall,
             new { before = _legacyBeforeSave, after = map.terrainGrid.TerrainAt(Legacy)?.defName });
@@ -842,11 +890,28 @@ public sealed class StackedWallsThreeFloors : WallCase
         c.Check("selection brackets of a visible lower wall are still drawn",
             visibleFromTop && visibleFromMiddle, new { visibleFromTop, visibleFromMiddle });
 
-        Step(() => View(new IntVec3(26, 0, 25 + Up2), 6f));
+        // A 4x4 solar generator on level 0 (x 39..42, z 23..26), unroofed except its first cell row-major, (39,23).
+        // Level +1 is open above it except (39,87), rooftop over that roofed cell, with a wall on it. Seen from +2,
+        // that one column stops at the wall; the generator must still be drawn across the rest of its footprint.
+        var solarRect = CellRect.FromLimits(39, 23, 42, 26);
+        foreach (var cell in solarRect.Cells)
+        {
+            map.roofGrid.SetRoof(new IntVec3(cell.x, 0, cell.z + Up), null);
+            map.roofGrid.SetRoof(cell, cell == new IntVec3(39, 0, 23) ? RoofDefOf.RoofConstructed : null);
+        }
+
+        Build(map, DefDatabase<ThingDef>.GetNamed("SolarGenerator"), new IntVec3(40, 0, 24), null);
+        Wall(map, new IntVec3(39, 0, 23 + Up), ThingDefOf.Steel);
+        var solar = new IntVec3(40, 0, 24).GetFirstBuilding(map);
+        c.Check("solar generator covers x 39..42, z 23..26", solar != null && solar.OccupiedRect() == solarRect,
+            new { rect = solar?.OccupiedRect().ToString() });
+
+        Step(() => View(new IntVec3(30, 0, 25 + Up2), 6f));
         Step(() =>
         {
             Mark("wood", new IntVec3(24, 0, 25 + Up2).ToVector3Shifted());
             Mark("granite", new IntVec3(28, 0, 25 + Up2).ToVector3Shifted());
+            Mark("solar", new Vector3(41.5f, 0f, 25.5f + Up2));
             Shot("top-floor");
         });
         Step(() => ReadColours("top-floor"));
@@ -854,6 +919,8 @@ public sealed class StackedWallsThreeFloors : WallCase
         Step(() => Shot("middle-floor"));
         ExpectWoodAgainst("seen from two floors up, the stacked wood wall shows, not the granite under it",
             "top-floor", "wood", "granite");
+        ExpectCool("a big building two floors down is still drawn when a wall above hides one of its cells",
+            "top-floor", "solar", 0.9f);
     }
 
     protected override void Verify(Context c)
