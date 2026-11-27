@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using AASBVehicleRamps;
+using HarmonyLib;
 using RimWorld;
 using Rwtf;
 using Vehicles;
@@ -213,49 +214,72 @@ public sealed class RampTrafficOpposed : RampTrafficCase
 
 public sealed class RampTrafficOpposedQueued : RampTrafficCase
 {
+    private const int FreezeTicks = 360;
+    private static VehiclePawn s_frozen;
+    private static int s_frozenUntil;
+    private Harmony _harmony;
+
+    /// <summary>Test-only prefix on VehiclePathFollower.PatherTick: the frozen vehicle's pather does nothing.</summary>
+    public static bool Freeze(VehiclePathFollower __instance) =>
+        __instance.vehicle != s_frozen || Find.TickManager.TicksGame >= s_frozenUntil;
+
+    public override void Teardown(Context c)
+    {
+        _harmony?.UnpatchAll(_harmony.Id);
+        s_frozen = null;
+        base.Teardown(c);
+    }
+
     public override string Id => "ramps.traffic-opposed-queued";
 
     public override string Intent =>
-        "Opposite traffic arriving while the other vehicle holds the ramp waits outside its mouth; the holder crosses "
-        + "out past it and the waiting vehicle follows";
+        "A descending vehicle that reaches the upper mouth while a climbing one holds the ramp waits outside it; the "
+        + "climber crosses out past it and the descender follows";
 
     protected override void Arrange(Context c)
     {
         SpawnRamp("AB2_VehicleRampDown", UpperA, Rot4.North);
         var climber = Enlist(SpawnVehicle(MainVehicle, new IntVec3(50, 0, 40), Rot4.West));
-        // Parked a few cells from the upper mouth, the descender reaches it about when the climber reaches the lower
-        // one. Which takes the ramp depends on Vehicle Framework's path timing; either way the other one must arrive
-        // while the ramp is held and wait outside the mouth the holder comes out of.
         var descender = Enlist(SpawnVehicle(MainVehicle, new IntVec3(44, 0, 86), Rot4.West));
         var climbGoal = new IntVec3(69, 0, 86);
-        var ordered = false;
-        var sawQueued = false;
-        var otherHeld = false;
+        var climbOrdered = false;
+        var descendOrdered = false;
+        var queuedWhileHeld = false;
+        _harmony = new Harmony("astryl.AsAboveSoBelow2.tests.trafficfreeze");
+        _harmony.Patch(AccessTools.Method(typeof(VehiclePathFollower), nameof(VehiclePathFollower.PatherTick)),
+            prefix: new HarmonyMethod(typeof(RampTrafficOpposedQueued), nameof(Freeze)) { priority = Priority.First });
         Step(Wait(90));
         Step(ctx =>
         {
             WatchTraffic(ctx);
-            if (!ordered)
+            if (!climbOrdered)
             {
-                ordered = true;
-                ctx.Check("both orders accepted", Order(climber, climbGoal) && Order(descender, Parking));
+                climbOrdered = true;
+                ctx.Check("climb ordered", Order(climber, climbGoal));
                 return false;
             }
 
-            if (!sawQueued && (RampTraffic.IsQueued(descender) || RampTraffic.IsQueued(climber)))
+            if (!descendOrdered && RampTraffic.IsHolder(climber))
             {
-                sawQueued = true;
-                otherHeld = RampTraffic.IsQueued(descender) ? RampTraffic.IsHolder(climber)
-                    : RampTraffic.IsHolder(descender);
+                // Vehicle Framework can take a few hundred ticks to start the descender and drive it to the upper
+                // mouth. Freezing the climber's pather once it holds the ramp keeps the ramp held that long, so the
+                // descender reliably arrives while it is in use. The frozen holder keeps its claim (under the stall
+                // limit), and the claim checks still run in the pather tick postfix.
+                descendOrdered = true;
+                s_frozen = climber;
+                s_frozenUntil = ctx.Tick + FreezeTicks;
+                ctx.Check("descent ordered while the climber holds the ramp", Order(descender, Parking),
+                    new { climber = State(climber), tick = ctx.Tick });
             }
 
-            return climber.Position == climbGoal && descender.Position == Parking
+            queuedWhileHeld |= RampTraffic.IsQueued(descender) && RampTraffic.IsHolder(climber);
+            return descendOrdered && climber.Position == climbGoal && descender.Position == Parking
                 && !climber.vehiclePather.Moving && !descender.vehiclePather.Moving;
         });
         Step(ctx =>
         {
             CheckCleanTraffic(ctx, 2);
-            ctx.Check("one vehicle waited in line while the other held the ramp", sawQueued && otherHeld,
+            ctx.Check("the descender waited in line while the climber held the ramp", queuedWhileHeld,
                 new { holds = RampDiagnostics.ClaimHolds, events = RampDiagnostics.Events });
             ctx.Check("each vehicle ended on the other floor", FloorOf(climber.Position) == 1
                 && FloorOf(descender.Position) == 0, new { states = Fleet.Select(State).ToArray() });

@@ -43,6 +43,11 @@ public static class RampTraffic
     /// <summary>True while the vehicle is stopped in line for a ramp.</summary>
     public static bool IsQueued(VehiclePawn vehicle) => vehicle != null && s_tickets.ContainsKey(vehicle);
 
+    /// <summary>True while the vehicle is stopped in line for this ramp or one sharing its traffic.</summary>
+    internal static bool IsQueuedFor(VehiclePawn vehicle, RampGroup group) =>
+        vehicle != null && s_tickets.TryGetValue(vehicle, out var ticket)
+        && (ticket.Key == group.TrafficKey || ticket.Group.PairKey == group.PairKey);
+
     /// <summary>
     /// Called before Vehicle Framework sets up the step from the vehicle's cell to <paramref name="next"/>. True
     /// stops the vehicle on its cell and puts it in line.
@@ -67,14 +72,15 @@ public static class RampTraffic
         var apron = group.EntryApron;
         if (Covers(vehicle, apron))
         {
-            // Already in the mouth area: it cannot stop short. Take a free claim so others wait, otherwise drive on.
-            if (!TryAcquire(vehicle, in edge, now, inside: true) && RampDiagnostics.Enabled)
+            // Already in the mouth area, so it cannot stop short. It takes a free claim. Otherwise it waits where it
+            // is: driving on toward the entry would put it on the holder's landing.
+            if (TryAcquire(vehicle, in edge, now, inside: true))
             {
-                RampDiagnostics.Event("inside without claim " + vehicle.def.defName + " " + vehicle.thingIDNumber
-                    + " at " + vehicle.Position + " rot " + vehicle.FullRotation.AsInt + " tick " + now);
+                return false;
             }
 
-            return false;
+            Enqueue(follower, in edge, now);
+            return true;
         }
 
         if (!MayCover(vehicle, next, apron))
@@ -136,7 +142,8 @@ public static class RampTraffic
     internal static bool YieldsTo(VehiclePawn blocker, VehiclePawn follower) =>
         s_tickets.Count > 0 && blocker != null && follower != null && s_tickets.TryGetValue(blocker, out var ticket)
         && s_byHolder.TryGetValue(follower, out var claim)
-        && (claim.Key == ticket.Key || CurrentKey(claim, RampRegistry.FreshTable(claim.Map)) == ticket.Key);
+        && (claim.Key == ticket.Key || CurrentKey(claim, RampRegistry.FreshTable(claim.Map)) == ticket.Key
+            || claim.Touches(ticket.Group));
 
     /// <summary>
     /// After each pather tick: drops the place in line of a vehicle that stopped waiting (an undrafted or reordered
@@ -237,15 +244,17 @@ public static class RampTraffic
         var approach = s_approaches.GetOrCreateValue(follower.vehicle);
         var left = path.NodesLeft;
         // Vehicle Framework appends a queued order to the same path object, which can add a crossing to a path cached
-        // as having none. Following a path never changes its last node; appending to it does.
+        // as having none. Following a path only removes nodes and never changes the last one. An append changes the
+        // last node, or (a round trip back to the same cell) adds more nodes than one step between lookups removes.
         var last = path.LastNode;
         if (!ReferenceEquals(approach.Path, path) || approach.TableVersion != table.Version || last != approach.LastNode
-            || (approach.Found && left < approach.EntryNodesLeft))
+            || left > approach.LastLeft || (approach.Found && left < approach.EntryNodesLeft))
         {
             approach.Scan(path, table, follower.vehicle.VehicleDef.size);
         }
 
         approach.LastNode = last;
+        approach.LastLeft = left;
 
         edge = approach.Edge;
         return approach.Found;
@@ -406,7 +415,7 @@ public static class RampTraffic
             ? previous.RequestTick
             : now;
         var isNew = previous == null || previous.Key != key;
-        s_tickets[vehicle] = new Ticket(follower, key, requestTick);
+        s_tickets[vehicle] = new Ticket(follower, edge.Group, key, requestTick);
         if (!isNew)
         {
             return;
@@ -562,15 +571,19 @@ public static class RampTraffic
     {
         private readonly IntVec3 _cell;
 
-        public Ticket(VehiclePathFollower follower, long key, int requestTick)
+        public Ticket(VehiclePathFollower follower, RampGroup group, long key, int requestTick)
         {
             _cell = follower.vehicle.Position;
+            Group = group;
             Map = follower.vehicle.Map;
             Key = key;
             RequestTick = requestTick;
         }
 
         public long Key { get; }
+
+        /// <summary>The ramp direction the vehicle waits for; its mouth areas decide conflicts after a rebuild.</summary>
+        public RampGroup Group { get; }
 
         public Map Map { get; }
 
@@ -604,6 +617,9 @@ public static class RampTraffic
 
         /// <summary>The path's last node at the previous lookup.</summary>
         public IntVec3 LastNode = IntVec3.Invalid;
+
+        /// <summary>The path's nodes left at the previous lookup.</summary>
+        public int LastLeft;
 
         /// <summary>The path's nodes left when the vehicle stands on the crossing's entry cell.</summary>
         public int EntryNodesLeft;

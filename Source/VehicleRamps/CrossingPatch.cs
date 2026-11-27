@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using AsAboveSoBelow;
@@ -373,7 +374,13 @@ public static class CrossingPatch
 
     private static Refusal? OccupiedSide(Map map, VehiclePawn vehicle, in RampEdge edge)
     {
-        if (RampClearance.IsOccupied(map, edge.EntryLane, vehicle))
+        // The vehicle holding the ramp leaves its entry lane by crossing, so a vehicle waiting in line for the same
+        // ramp there (one that was already inside the mouth area) does not block it. The exit lane stays strict.
+        var group = edge.Group;
+        Func<VehiclePawn, bool> waiting = RampTraffic.IsHolder(vehicle)
+            ? other => RampTraffic.IsQueuedFor(other, group)
+            : null;
+        if (RampClearance.IsOccupied(map, edge.EntryLane, vehicle, waiting))
         {
             return Refusal.EntryBlocked;
         }
