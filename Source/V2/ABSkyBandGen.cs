@@ -231,11 +231,11 @@ namespace AsAboveSoBelow
                     {
                         terrainGrid.SetTerrain(intVec3, ABDefOf.AB_RoofSurface);
                     }
-                    else if (roofDef2 != null && !roofDef2.isNatural)
+                    else if (ABSkySync.IsRooftopRoof(roofDef2))
                     {
                         terrainGrid.SetTerrain(intVec3, ABOrbitRules.ProjectsUpperLevel(map, intVec4) ? ABDefOf.AB_RoofSurface : aB_OpenAir);
                     }
-                    else if (roofDef2 != null && roofDef2.isNatural)
+                    else if (roofDef2 != null)
                     {
                         terrainGrid.SetTerrain(intVec3, ABDefOf.AB_MountainTop);
                     }

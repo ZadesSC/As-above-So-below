@@ -158,6 +158,7 @@ Every one of these is optional. Nothing loads unless you already own the mod.
     <li>telardo.MultiFloors</li>
     <li>ZLevels1.1</li>
     <li>AzraelGodKing.Strata</li>
+    <li>zades.aasb.thinroofsupport</li>
   </incompatibleWith>
   <modVersion>1.5.7</modVersion>
 </ModMetaData>
