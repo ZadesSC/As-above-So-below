@@ -153,7 +153,7 @@ namespace AsAboveSoBelow
             Map map = Find.CurrentMap;
             ABBandMap bands = map == null ? null : ABBands.CompOf(map);
             int found = 0;
-            if (bands != null && bands.Banded
+            if (bands != null && bands.Banded && !ABBands.CoveredAt(map, raw)
                 && ABBands.TryResolveVisibleFrom(map, bands, raw, requireUnfogged: true,
                     out IntVec3 _, out int d))
             {

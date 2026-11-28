@@ -128,6 +128,10 @@ namespace AsAboveSoBelow
                     }
 
                     bool hasVisibleCell = ABBands.TryResolveVisibleBelow(map, bands, viewCell, out var below, out var drop);
+                    // A wall stacked in this cell (#21) is drawn over whatever is printed here,
+                    // except fog, which sits at FogOfWar altitude: never mirror the level
+                    // below's fog onto it. Its own level's fog is vanilla's to draw.
+                    bool coveredHere = ABBands.CoveredAt(map, viewCell);
                     bool belowIsFogged = hasVisibleCell && fogGrid.IsFogged(below);
                     if (!hasVisibleCell | belowIsFogged)
                     {
@@ -141,7 +145,7 @@ namespace AsAboveSoBelow
                             AddQuad(GetSubMesh(AirMaskMat), viewCell, maskAltitude, OpaqueWhite);
                         }
 
-                        if (belowIsFogged)
+                        if (belowIsFogged && !coveredHere)
                         {
                             EmitBelowFogFan(map, bands, fogGrid, below, viewCell, fogAltitude);
                             if (slot > 0 && drop > slot)
@@ -174,7 +178,7 @@ namespace AsAboveSoBelow
                     }
 
                     hasGeometry = true;
-                    if (ABV2Debug.DrawBelowAirMask)
+                    if (ABV2Debug.DrawBelowAirMask && !coveredHere)
                     {
                         EmitBelowFogFan(map, bands, fogGrid, below, viewCell, fogAltitude);
                     }
@@ -703,8 +707,8 @@ namespace AsAboveSoBelow
         }
 
         /// <summary>Multi-cell things print exactly once, from the first occupied cell
-        /// (row-major) that has open air above it - not from the root cell, which may sit
-        /// under a rooftop while the rest of the body is exposed.</summary>
+        /// (row-major) that is actually seen from the viewing level - not from the root cell,
+        /// which may sit under a rooftop while the rest of the body is exposed.</summary>
         private static bool IsPrintAnchor(Thing t, IntVec3 belowCell, Map map, ABBandMap bands,
             TerrainGrid terrainGrid, TerrainDef air, int drop)
         {
@@ -723,7 +727,16 @@ namespace AsAboveSoBelow
                     {
                         continue;
                     }
-                    if (ABBands.ShowsBelow(terrainGrid.TerrainAt(above)))
+                    // The first cell whose view column actually LANDS on this footprint cell -
+                    // not merely the first with see-through terrain above it, because the
+                    // descent can stop earlier, on an opaque floor or on a wall stacked on an
+                    // intermediate level (#21). Anchoring on such a cell printed nothing at
+                    // all, hiding the whole building even where the rest of it is in view.
+                    // Unfogged too: Regenerate skips a view cell whose source is fogged before
+                    // it reaches the thing loop, so a fogged anchor would print nothing.
+                    if (ABBands.TryResolveVisibleBelow(map, bands, above, out IntVec3 seen, out int seenDrop)
+                        && seen.x == q.x && seen.z == q.z && seenDrop == drop
+                        && !map.fogGrid.IsFogged(q))
                     {
                         return q.x == belowCell.x && q.z == belowCell.z;
                     }
@@ -749,8 +762,8 @@ namespace AsAboveSoBelow
         ///
         /// ONE PASS, not two, and in this order. Scaling first means the pivot is the
         /// thing's real TrueCenter rather than a translated copy of it, so there is no
-        /// second place for the `- Slot` family of bugs to hide. Altitude (y) is untouched:
-        /// it is draw order in this mod, not height.
+        /// second place for the `- Slot` family of bugs to hide. Altitude (y) is draw order
+        /// in this mod, not height, and it is only nudged down by BelowAltitudeNudge.
         ///
         /// Tinting is still deliberately absent - the below view is lit by
         /// SectionLayer_ABBelowLighting from the surface's own glow, and an artificial dim
@@ -758,6 +771,27 @@ namespace AsAboveSoBelow
         /// distance cue that costs no brightness, which is why it came back and the tint
         /// did not.
         /// </summary>
+        /// <summary>
+        /// How far every print from a lower level sits below the same altitude on the
+        /// viewing level: half an altitude layer (layers are ten AltInc apart).
+        ///
+        /// ⚠ NOT LESS THAN A FEW AltInc. Things print parts of themselves above their own
+        /// layer base - Graphic_LinkedCornerFiller puts each wall corner filler one full
+        /// AltInc above the wall face - so a nudge of half an AltInc left a lower 2x2 block's
+        /// corner filler drawn over a wall stacked on that corner. Half a layer clears every
+        /// such offset, and the lowest thing this layer prints (filth and conduits, a few
+        /// layers above TerrainScatter, where this layer prints lower-level terrain dressing)
+        /// still stays above the lower level's own terrain.
+        ///
+        /// Issue #21. A wall stacked on a lower wall stands on AB_WallTop, which shows the
+        /// level below, so the lower wall is printed into the same cell at the same Building
+        /// altitude as the upper wall. Equal depth meant the two fought per pixel and the
+        /// lower wall usually won: the stacked wall vanished and its links read as the lower
+        /// wall's. Shifting every print by one constant keeps the order among lower-level
+        /// things exactly as it was and only breaks ties in favour of the viewing level.
+        /// </summary>
+        internal const float BelowAltitudeNudge = Altitudes.AltInc * 5f;
+
         private void FinishNewVerts(int drop, Vector3 centre, float shrink)
         {
             bool scaling = shrink < 0.999f;
@@ -774,7 +808,7 @@ namespace AsAboveSoBelow
                         v.x = centre.x + (v.x - centre.x) * shrink;
                         v.z = centre.z + (v.z - centre.z) * shrink;
                     }
-                    verts[j] = new Vector3(v.x, v.y, v.z + drop);
+                    verts[j] = new Vector3(v.x, v.y - BelowAltitudeNudge, v.z + drop);
                 }
             }
         }
@@ -808,6 +842,58 @@ namespace AsAboveSoBelow
             AccessTools.FieldRefAccess<MapDrawer, Map>("map");
 
         private static bool mirroring;
+
+        /// <summary>For each thing bigger than one cell at <paramref name="loc"/> or under it
+        /// on a lower level, dirty every section its footprint covers on each level above the
+        /// thing. A few thing-list reads per call; dirties nothing for ordinary columns.
+        /// Called with <c>mirroring</c> set, so these MapMeshDirty calls do not recurse.</summary>
+        private static void DirtyMultiCellFootprints(Map map, ABBandMap bands, IntVec3 loc, int fromBand,
+            ulong flag)
+        {
+            for (int b = fromBand; b >= 0; b--)
+            {
+                IntVec3 c = b == fromBand ? loc : bands.Translate(loc, b);
+                if (!c.InBounds(map))
+                {
+                    continue;
+                }
+                System.Collections.Generic.List<Thing> things = map.thingGrid.ThingsListAtFast(c);
+                for (int i = 0; i < things.Count; i++)
+                {
+                    Thing t = things[i];
+                    if (t.def.size.x <= 1 && t.def.size.z <= 1)
+                    {
+                        continue;
+                    }
+                    CellRect rect = t.OccupiedRect();
+                    for (int up = b + 1; up < bands.bandCount; up++)
+                    {
+                        int dz = (up - b) * bands.Slot;
+                        // One dirty per section: step by the section size, plus the far edge.
+                        for (int z = rect.minZ; ; z = System.Math.Min(z + Section.Size, rect.maxZ))
+                        {
+                            for (int x = rect.minX; ; x = System.Math.Min(x + Section.Size, rect.maxX))
+                            {
+                                IntVec3 above = new IntVec3(x, 0, z + dz);
+                                if (above.InBounds(map))
+                                {
+                                    map.mapDrawer.MapMeshDirty(above, flag, regenAdjacentCells: false,
+                                        regenAdjacentSections: false);
+                                }
+                                if (x == rect.maxX)
+                                {
+                                    break;
+                                }
+                            }
+                            if (z == rect.maxZ)
+                            {
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
 
         private static void Postfix(MapDrawer __instance, IntVec3 loc, ulong dirtyFlags)
         {
@@ -863,6 +949,15 @@ namespace AsAboveSoBelow
                 mirroring = true;
                 try
                 {
+                    // A change in this column (fog, terrain, a building) can move the print
+                    // anchor of a multi-cell thing at or under it (IsPrintAnchor) to another
+                    // footprint cell, possibly in another section - which then keeps its old
+                    // mesh and the thing vanishes until something else rebuilds it. Such a
+                    // thing gets every section its footprint covers dirtied, on every level
+                    // that can look down at it - including THIS level when the thing is below
+                    // it (a terrain change on the viewing level moves anchors too). Exactly
+                    // the sections it covers, not a 3x3 block, and only for those columns.
+                    DirtyMultiCellFootprints(map, bands, loc, fromBand, mirrorFlag);
                     for (int b = fromBand + 1; b < bands.bandCount; b++)
                     {
                         IntVec3 above = bands.Translate(loc, b);

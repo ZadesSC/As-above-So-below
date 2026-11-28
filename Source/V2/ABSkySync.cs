@@ -27,7 +27,8 @@ namespace AsAboveSoBelow
     /// THE RULE, in precedence order, applied to the cell one Slot above `below`:
     ///   1. constructed or thin rock roof below -> AB_RoofSurface (buildable AND walkable)
     ///   2. natural roof below        -> AB_MountainTop (mountain mass)
-    ///   3. impassable edifice below  -> AB_WallTop     (buildable, NOT walkable)
+    ///   3. roof-holding edifice below -> AB_WallTop    (buildable, NOT walkable): walls,
+    ///      doors, columns, natural rock - things a structure can stand on
     ///   4. otherwise                 -> AB_OpenAir
     ///
     /// ⚠ ROOF BEATS EDIFICE - BOTH KINDS OF ROOF. Getting that only half right is the
@@ -47,7 +48,7 @@ namespace AsAboveSoBelow
     ///   * that same mass silently stops being walkable;
     ///   * §24b's mass rendering has nothing left to draw.
     /// A roof is a continuous surface INCLUDING the walls it rests on, and a mountain is the
-    /// roof of its own rock. AB_WallTop is only for impassable things with NO roof over
+    /// roof of its own rock. AB_WallTop is only for roof-holding things with NO roof over
     /// them: a free-standing wall, or the outer ring of an unroofed compound.
     ///
     /// ⚠ ONLY DERIVED CELLS ARE TOUCHED. The sky band also holds generated mountain and
@@ -85,7 +86,9 @@ namespace AsAboveSoBelow
     /// system re-derives the entire sky band from scratch. Anything the generator or
     /// CarveLanding wrote that this resolver would not reproduce is silently overwritten at
     /// that moment and then saved. An event hook that looks incremental is a FULL SWEEP on
-    /// the load path; assume it and make the resolver agree with the generator.
+    /// the load path; assume it and make the resolver agree with the generator. (That sweep
+    /// is now replayed once at Map.FinalizeInit, after everything has respawned - see
+    /// deferringMap.)
     /// </summary>
     public static class ABSkySync
     {
@@ -190,6 +193,24 @@ namespace AsAboveSoBelow
             return map.roofGrid.RoofAt(target) != null || target.GetEdifice(map) != null;
         }
 
+        /// <summary>
+        /// A wall (any floor-covering building) left standing on AB_OpenAir, which no player
+        /// action can produce: saves written under the old load order (#21) hold stacked
+        /// walls like that. SyncAbove re-derives such a cell despite CarriesOwnStructure,
+        /// because re-deriving can only give it ground back, never take any away.
+        ///
+        /// ⚠ NOT LINKS. A stair or ramp footprint on open air has its own repair
+        /// (RepairAfterLoad restores it to AB_RoofSurface). Re-deriving it here first would
+        /// resolve it from the link below - an unroofed door that holds roof, so AB_WallTop,
+        /// which is impassable - and the landing repair, which only touches open air, would
+        /// then leave the staircase standing on ground nobody can walk on.
+        /// </summary>
+        private static bool StrandedWall(Map map, IntVec3 target, TerrainDef current)
+        {
+            return current == ABDefOf.AB_OpenAir && ABBands.CoveredAt(map, target)
+                && !(target.GetEdifice(map) is Building_ABStairs2);
+        }
+
         // ⚠ THE PROTECTED LANDING APRON IS GONE. THIRD AND FINAL SHRINK, AND THE REASON
         // IS THAT EVERY VERSION OF IT PRODUCED THE SAME FIELD REPORT.
         //
@@ -217,11 +238,71 @@ namespace AsAboveSoBelow
         // refuses. SyncAbove still refuses to dissolve ground out from under a pawn or
         // building that is standing on it right now, which is the case that actually matters.
 
+        /// <summary>
+        /// The map whose saved things are being respawned right now (Map.FinalizeLoading),
+        /// and the cells whose sync was asked for meanwhile.
+        ///
+        /// ⚠ WHY LOAD MUST WAIT (issue #21, "stacked wall stands on open air after reload").
+        /// FinalizeLoading respawns buildings one at a time, and every EdificeGrid.Register
+        /// syncs the 3x3 around the building (SyncRectFor). So the first wall of a run to
+        /// come back re-derives the cells above its NEIGHBOURS while their walls are still
+        /// unspawned: each resolves to AB_OpenAir and is written, stripping any floor laid
+        /// there. When the neighbour's own wall registers a moment later the cell above is
+        /// already protected - a wall stacked on it has respawned too, so CarriesOwnStructure
+        /// refuses - and the stacked wall is left standing on open air for good. Which cells
+        /// lose depends on spawn order, so it looked random from save to save.
+        ///
+        /// Deferring keeps exactly the same set of cells and the same rules; it only moves
+        /// the work to Map.FinalizeInit, which runs after everything has respawned, so every
+        /// resolve sees the finished map. Deduplicated by cell index, which also makes the
+        /// load cheaper than the per-building 3x3 storms it replaces.
+        /// </summary>
+        private static Map deferringMap;
+
+        private static readonly HashSet<int> deferredCells = new HashSet<int>();
+
+        internal static void BeginDeferring(Map map)
+        {
+            deferringMap = map;
+            deferredCells.Clear();
+        }
+
+        /// <summary>Replay every sync requested while <paramref name="map"/> was loading.
+        /// Safe to call more than once; only the first call after BeginDeferring does work.</summary>
+        internal static void FlushDeferred(Map map)
+        {
+            if (map == null || deferringMap != map)
+            {
+                return;
+            }
+            deferringMap = null;
+            if (deferredCells.Count == 0)
+            {
+                return;
+            }
+            int[] cells = new int[deferredCells.Count];
+            deferredCells.CopyTo(cells);
+            deferredCells.Clear();
+            Array.Sort(cells);
+            for (int i = 0; i < cells.Length; i++)
+            {
+                SyncAbove(map, map.cellIndices.IndexToCell(cells[i]));
+            }
+        }
+
         /// <summary>Recompute the cell directly above <paramref name="below"/>.</summary>
         public static void SyncAbove(Map map, IntVec3 below)
         {
             if (Suspended || map == null || !ABGuard.On(ABGuard.RoofSync))
             {
+                return;
+            }
+            if (map == deferringMap)
+            {
+                if (below.InBounds(map))
+                {
+                    deferredCells.Add(map.cellIndices.CellToIndex(below));
+                }
                 return;
             }
             ABBandMap bands = ABBands.CompOf(map);
@@ -247,7 +328,7 @@ namespace AsAboveSoBelow
             {
                 return; // generated summit, or a floor laid on ground that is not ours
             }
-            if (CarriesOwnStructure(map, target))
+            if (CarriesOwnStructure(map, target) && !StrandedWall(map, target, current))
             {
                 return; // the band's own mass, a built structure, or a link footprint
             }
@@ -313,8 +394,14 @@ namespace AsAboveSoBelow
                 return ABDefOf.AB_MountainTop;
             }
 
+            // ⚠ ROOF-HOLDING ONLY, NOT EVERY IMPASSABLE BUILDING (#21 follow-up). Any
+            // impassable edifice used to qualify, so the top of a nutrient paste dispenser,
+            // a geothermal generator or a ship part became a wall top and a wall could be
+            // built on it. A wall top is the top of something a structure can stand on:
+            // walls, doors and columns (the column rule is the "tile above is the connector"
+            // design in AB2_Columns.xml) and natural rock all hold roof; machines do not.
             Building edifice = below.GetEdifice(map);
-            if (flag && edifice != null && edifice.def != null && (edifice.def.passability == Traversability.Impassable || edifice.def.holdsRoof))
+            if (flag && edifice != null && edifice.def != null && edifice.def.holdsRoof)
             {
                 return ABDefOf.AB_WallTop;
             }
@@ -385,7 +472,11 @@ namespace AsAboveSoBelow
                     + " (generated summit, or a floor laid on ground that is not ours)")
                     .ToString();
             }
-            if (CarriesOwnStructure(map, target))
+            if (StrandedWall(map, target, current))
+            {
+                sb.Append(" (wall standing on open air: re-derived despite its structure)");
+            }
+            else if (CarriesOwnStructure(map, target))
             {
                 return sb.Append(" -> STOP: target carries its own structure (roof=")
                     .Append(map.roofGrid.RoofAt(target)?.defName ?? "none")
@@ -616,6 +707,49 @@ namespace AsAboveSoBelow
     /// <summary>...and going away again. Runs as a POSTFIX so the grid has already been
     /// cleared - a prefix would still see the wall and re-derive AB_WallTop, leaving a
     /// phantom ledge above a wall that no longer exists.</summary>
+    /// <summary>Defers sky sync while a loaded map respawns its things; see
+    /// ABSkySync.deferringMap. The finalizer flushes even if loading threw, so a failed
+    /// load can never leave sync switched off for the rest of the session.</summary>
+    [HarmonyPatch(typeof(Map), nameof(Map.FinalizeLoading))]
+    public static class Patch_Map_ABDeferSkySyncDuringLoad
+    {
+        private static void Prefix(Map __instance)
+        {
+            ABSkySync.BeginDeferring(__instance);
+        }
+
+        private static void Finalizer(Map __instance)
+        {
+            try
+            {
+                ABSkySync.FlushDeferred(__instance);
+            }
+            catch (Exception e)
+            {
+                ABGuard.Disable(ABGuard.RoofSync, e, "V2 sky sync load flush");
+            }
+        }
+    }
+
+    /// <summary>FinalizeLoading calls FinalizeInit once every saved thing is back on the
+    /// map, and before regions, power nets or PostMapInit read the terrain: the right
+    /// moment to replay the deferred sky sync.</summary>
+    [HarmonyPatch(typeof(Map), nameof(Map.FinalizeInit))]
+    public static class Patch_Map_ABFlushSkySyncAfterLoad
+    {
+        private static void Prefix(Map __instance)
+        {
+            try
+            {
+                ABSkySync.FlushDeferred(__instance);
+            }
+            catch (Exception e)
+            {
+                ABGuard.Disable(ABGuard.RoofSync, e, "V2 sky sync load flush");
+            }
+        }
+    }
+
     [HarmonyPatch(typeof(EdificeGrid), nameof(EdificeGrid.DeRegister))]
     public static class Patch_EdificeGrid_ABDeRegister
     {

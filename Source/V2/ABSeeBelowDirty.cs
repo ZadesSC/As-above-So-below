@@ -34,6 +34,51 @@ namespace AsAboveSoBelow
         }
     }
 
+    /// <summary>
+    /// TryResolveVisibleBelow stops on a level whose see-through cell holds a covering
+    /// building (ABBands.CoveredAt, #21), so its per-terrain-version cache must also turn
+    /// over when such a building appears or goes. Only covering buildings on see-through
+    /// terrain matter, which in play is a wall built on, or removed from, a wall top.
+    /// </summary>
+    [HarmonyPatch(typeof(EdificeGrid), nameof(EdificeGrid.Register))]
+    public static class Patch_EdificeGrid_ABSeeBelowDirty
+    {
+        internal static void Dirty(Map map, Building ed)
+        {
+            if (map == null || ed == null || ed.def == null || !ed.def.coversFloor)
+            {
+                return;
+            }
+            ABBandMap bands = ABBands.CompOf(map);
+            foreach (IntVec3 c in ed.OccupiedRect())
+            {
+                if (!c.InBounds(map) || !ABBands.ShowsBelow(map.terrainGrid.TerrainAt(c)))
+                {
+                    continue;
+                }
+                // Mesh invalidation for lower multi-cell things whose print anchor this
+                // moves is the upward mirror's job (DirtyMultiCellFootprints): spawning or
+                // removing the building dirties this cell, and the mirror sees the column.
+                bands?.DirtySeeBelowCache();
+                return;
+            }
+        }
+
+        private static void Postfix(Map ___map, Building ed)
+        {
+            Dirty(___map, ed);
+        }
+    }
+
+    [HarmonyPatch(typeof(EdificeGrid), nameof(EdificeGrid.DeRegister))]
+    public static class Patch_EdificeGrid_ABSeeBelowDirtyRemove
+    {
+        private static void Postfix(Map ___map, Building ed)
+        {
+            Patch_EdificeGrid_ABSeeBelowDirty.Dirty(___map, ed);
+        }
+    }
+
     /// <summary>See above: the one TerrainGrid writer that bypasses
     /// DoTerrainChangedEffects. Gravship moves rewrite terrain wholesale.</summary>
     [HarmonyPatch(typeof(TerrainGrid), nameof(TerrainGrid.RemoveGravshipTerrainUnsafe))]

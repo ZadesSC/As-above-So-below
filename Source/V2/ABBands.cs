@@ -247,6 +247,31 @@ namespace AsAboveSoBelow
             return t != null && (t == ABDefOf.AB_OpenAir || t == ABDefOf.AB_WallTop);
         }
 
+        /// <summary>
+        /// True when the cell holds its own floor-covering building (a wall, say), so the
+        /// cursor should point at that building and not through it at the level below.
+        ///
+        /// Issue #21. A wall stacked on a lower wall stands on AB_WallTop, and ShowsBelow is a
+        /// TERRAIN test, so the cell still reads as see-through with the wall standing in it.
+        /// Drawing copes (SectionLayer_ABBelowV2 prints lower levels a hair under the viewing
+        /// level), but pointing descended straight past the stacked wall: hover readouts,
+        /// targeting and right-click orders all landed on the wall below. Kept out of
+        /// ShowsBelow on purpose: the START cell of a view keeps drawing the level below (the
+        /// stacked wall is drawn over it), so only pointing asks about the start cell.
+        /// TryResolveVisibleBelow does use it for the levels it passes THROUGH, which is why
+        /// building or removing a covering building on a see-through cell bumps the
+        /// see-below cache (Patch_EdificeGrid_ABSeeBelowDirty).
+        /// </summary>
+        public static bool CoveredAt(Map map, IntVec3 cell)
+        {
+            if (map == null || !cell.InBounds(map))
+            {
+                return false;
+            }
+            Building edifice = map.edificeGrid[cell];
+            return edifice != null && edifice.def.coversFloor;
+        }
+
         public static bool InGutter(Map map, IntVec3 cell)
         {
             ABBandMap c = CompOf(map);
@@ -339,10 +364,12 @@ namespace AsAboveSoBelow
                 }
                 cur = next;
                 drop += slot;
-                if (!ShowsBelow(map.terrainGrid.TerrainAt(cur)))
+                if (!ShowsBelow(map.terrainGrid.TerrainAt(cur)) || CoveredAt(map, cur))
                 {
                     below = cur;
-                    return true; // an opaque floor: this is what is seen
+                    // An opaque floor, or a wall stacked on a wall top on this level (#21):
+                    // either way this level is what is seen, not the one under it.
+                    return true;
                 }
                 if (bands.BandOf(cur) <= 0)
                 {

@@ -63,6 +63,7 @@ namespace AsAboveSoBelow
             // renderer by construction.
             IntVec3 above = bands.Translate(cell, viewBand);
             if (!above.InBounds(map)
+                || ABBands.CoveredAt(map, above) // a wall stacked here hides this thing (#21)
                 || !ABBands.TryResolveVisibleBelow(map, bands, above, out IntVec3 seen, out int drop)
                 || seen.x != cell.x || seen.z != cell.z)
             {

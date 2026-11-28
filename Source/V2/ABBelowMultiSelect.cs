@@ -96,8 +96,10 @@ namespace AsAboveSoBelow
                 {
                     continue;
                 }
-                // Same see-through rule as every other below interaction.
-                if (!ABBands.TryResolveVisibleBelow(map, bands, above, out IntVec3 c, out _)
+                // Same see-through rule as every other below interaction, including not
+                // reaching past a wall stacked in the cell (#21).
+                if (ABBands.CoveredAt(map, above)
+                    || !ABBands.TryResolveVisibleBelow(map, bands, above, out IntVec3 c, out _)
                     || fog.IsFogged(c))
                 {
                     continue;
